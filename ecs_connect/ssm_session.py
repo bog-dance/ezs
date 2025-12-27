@@ -11,8 +11,8 @@ console = Console()
 def get_container_id(instance_id: str, container_name: str, region: str) -> Optional[str]:
     """Get Docker container ID from EC2 instance via SSM"""
     try:
-        # Execute docker ps command via SSM
-        command = f"docker ps --filter 'name={container_name}' --format '{{{{.ID}}}}'"
+        # Execute docker ps command via SSM (with sudo for permissions)
+        command = f"sudo docker ps --filter 'name={container_name}' --format '{{{{.ID}}}}'"
         
         result = subprocess.run([
             'aws', 'ssm', 'send-command',
@@ -79,8 +79,8 @@ def start_container_session(instance_id: str, container_id: str, region: str):
     """Start SSM session and exec into Docker container"""
     console.print(f"[green]Starting session to container {container_id[:12]}...[/green]")
     
-    # Build docker exec command
-    docker_command = f"docker exec -it {container_id} bash"
+    # Build docker exec command (with sudo for permissions)
+    docker_command = f"sudo docker exec -it {container_id} bash"
     
     try:
         subprocess.run([

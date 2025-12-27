@@ -13,7 +13,7 @@ def select_region(regions: List[str]) -> Optional[str]:
     return inquirer.select(
         message="Select AWS region:",
         choices=regions,
-        multiselect=False,
+        max_height=10,
     ).execute()
 
 
@@ -31,7 +31,7 @@ def select_cluster(clusters: List[str]) -> Optional[str]:
     return inquirer.select(
         message="Select ECS cluster:",
         choices=choices,
-        multiselect=False,
+        max_height=10,
     ).execute()
 
 
@@ -49,7 +49,7 @@ def select_service(services: List[str]) -> Optional[str]:
     return inquirer.select(
         message="Select ECS service:",
         choices=choices,
-        multiselect=False,
+        max_height=10,
     ).execute()
 
 
@@ -67,7 +67,7 @@ def fuzzy_select_service(services: List[str]) -> Optional[str]:
     return inquirer.fuzzy(
         message="Multiple services found, please select one:",
         choices=choices,
-        multiselect=False
+        max_height=10,
     ).execute()
 
 
@@ -91,7 +91,7 @@ def select_task(tasks: List[dict]) -> Optional[dict]:
     return inquirer.select(
         message="Multiple tasks running. Select one:",
         choices=choices,
-        multiselect=False,
+        max_height=10,
     ).execute()
 
 
@@ -115,7 +115,7 @@ def select_container(containers: List[dict]) -> Optional[dict]:
     return inquirer.select(
         message="Multiple containers found. Select one:",
         choices=choices,
-        multiselect=False,
+        max_height=10,
     ).execute()
 
 

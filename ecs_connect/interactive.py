@@ -1,16 +1,20 @@
-"""Interactive CLI prompts using questionary"""
+"""Interactive CLI prompts using InquirerPy"""
 
-import questionary
+from InquirerPy import inquirer
+from InquirerPy.base.control import Choice
 from typing import List, Optional
 from .aws_client import extract_name_from_arn
 
 
 def select_region(regions: List[str]) -> Optional[str]:
     """Prompt user to select AWS region"""
-    return questionary.select(
-        "Select AWS region:",
-        choices=regions
-    ).ask()
+    if not regions:
+        return None
+    return inquirer.select(
+        message="Select AWS region:",
+        choices=regions,
+        multiselect=False,
+    ).execute()
 
 
 def select_cluster(clusters: List[str]) -> Optional[str]:
@@ -19,19 +23,16 @@ def select_cluster(clusters: List[str]) -> Optional[str]:
         print("No clusters found in this region")
         return None
     
-    # Display friendly names but return full ARN
     choices = [
-        questionary.Choice(
-            title=extract_name_from_arn(cluster),
-            value=cluster
-        )
+        Choice(value=cluster, name=extract_name_from_arn(cluster))
         for cluster in clusters
     ]
     
-    return questionary.select(
-        "Select ECS cluster:",
-        choices=choices
-    ).ask()
+    return inquirer.select(
+        message="Select ECS cluster:",
+        choices=choices,
+        multiselect=False,
+    ).execute()
 
 
 def select_service(services: List[str]) -> Optional[str]:
@@ -41,17 +42,15 @@ def select_service(services: List[str]) -> Optional[str]:
         return None
     
     choices = [
-        questionary.Choice(
-            title=extract_name_from_arn(service),
-            value=service
-        )
+        Choice(value=service, name=extract_name_from_arn(service))
         for service in services
     ]
     
-    return questionary.select(
-        "Select ECS service:",
-        choices=choices
-    ).ask()
+    return inquirer.select(
+        message="Select ECS service:",
+        choices=choices,
+        multiselect=False,
+    ).execute()
 
 
 def select_task(tasks: List[dict]) -> Optional[dict]:
@@ -61,21 +60,21 @@ def select_task(tasks: List[dict]) -> Optional[dict]:
         return None
     
     if len(tasks) == 1:
-        # Auto-select if only one task
         return tasks[0]
     
     choices = [
-        questionary.Choice(
-            title=f"{extract_name_from_arn(task['taskArn'])} (started: {task.get('startedAt', 'unknown')})",
-            value=task
+        Choice(
+            value=task,
+            name=f"{extract_name_from_arn(task['taskArn'])} (started: {task.get('startedAt', 'unknown')})"
         )
         for task in tasks
     ]
     
-    return questionary.select(
-        "Multiple tasks running. Select one:",
-        choices=choices
-    ).ask()
+    return inquirer.select(
+        message="Multiple tasks running. Select one:",
+        choices=choices,
+        multiselect=False,
+    ).execute()
 
 
 def select_container(containers: List[dict]) -> Optional[dict]:
@@ -85,26 +84,26 @@ def select_container(containers: List[dict]) -> Optional[dict]:
         return None
     
     if len(containers) == 1:
-        # Auto-select if only one container
         return containers[0]
     
     choices = [
-        questionary.Choice(
-            title=f"{container['name']} (status: {container.get('lastStatus', 'unknown')})",
-            value=container
+        Choice(
+            value=container,
+            name=f"{container['name']} (status: {container.get('lastStatus', 'unknown')})"
         )
         for container in containers
     ]
     
-    return questionary.select(
-        "Multiple containers found. Select one:",
-        choices=choices
-    ).ask()
+    return inquirer.select(
+        message="Multiple containers found. Select one:",
+        choices=choices,
+        multiselect=False,
+    ).execute()
 
 
 def confirm_container_exec() -> bool:
     """Ask user if they want to exec into container"""
-    return questionary.confirm(
-        "Connect to container? (No = SSH to host only)",
+    return inquirer.confirm(
+        message="Connect to container? (No = SSH to host only)",
         default=True
-    ).ask()
+    ).execute()

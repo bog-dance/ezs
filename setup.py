@@ -14,7 +14,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "boto3>=1.34.0",
-        "questionary>=2.0.1",
+        "inquirerpy>=0.3.4",
         "rich>=13.7.0",
     ],
     entry_points={

@@ -1,127 +1,166 @@
-"""Interactive CLI prompts using InquirerPy"""
+"""Interactive CLI prompts using simple-term-menu"""
 
-from InquirerPy import inquirer
-from InquirerPy.base.control import Choice
-from typing import List, Optional
+from simple_term_menu import TerminalMenu
+from typing import List, Optional, Union
 from .aws_client import extract_name_from_arn
 
 
-def select_region(regions: List[str]) -> Optional[str]:
-    """Prompt user to select AWS region"""
+# Sentinel value for "go back"
+class BackSignal:
+    """Sentinel class to indicate user wants to go back."""
+    pass
+
+
+BACK = BackSignal()
+BACK_OPTION = "← Back"
+
+
+def _create_menu(entries: List[str], title: str, show_back: bool = True) -> TerminalMenu:
+    """Create a terminal menu with search enabled."""
+    menu_entries = [BACK_OPTION] + entries if show_back else entries
+    return TerminalMenu(
+        menu_entries,
+        title=title,
+        menu_cursor_style=("fg_cyan", "bold"),
+        menu_highlight_style=("bg_cyan", "fg_black"),
+        search_key="/",
+        search_highlight_style=("fg_yellow", "bold"),
+        quit_keys=("escape", "q", "\x04"),
+    )
+
+
+def select_region(regions: dict) -> Optional[str]:
+    """Prompt user to select AWS region (no back option - first menu)"""
     if not regions:
         return None
-    return inquirer.select(
-        message="Select AWS region:",
-        choices=regions,
-        max_height=10,
-    ).execute()
+
+    region_codes = list(regions.keys())
+    display_names = [f"{name} ({code})" for code, name in regions.items()]
+
+    menu = TerminalMenu(
+        display_names,
+        title="Select AWS region:",
+        menu_cursor_style=("fg_cyan", "bold"),
+        menu_highlight_style=("bg_cyan", "fg_black"),
+        search_key="/",
+        search_highlight_style=("fg_yellow", "bold"),
+        quit_keys=("escape", "q", "\x04"),
+    )
+    idx = menu.show()
+    return region_codes[idx] if idx is not None else None
 
 
-def select_cluster(clusters: List[str]) -> Optional[str]:
+def select_cluster(clusters: List[str]) -> Union[str, BackSignal, None]:
     """Prompt user to select ECS cluster"""
     if not clusters:
         print("No clusters found in this region")
         return None
-    
-    choices = [
-        Choice(value=cluster, name=extract_name_from_arn(cluster))
-        for cluster in clusters
-    ]
-    
-    return inquirer.select(
-        message="Select ECS cluster:",
-        choices=choices,
-        max_height=10,
-    ).execute()
+
+    display_names = [extract_name_from_arn(c) for c in clusters]
+    menu = _create_menu(display_names, "Select ECS cluster (type to search):")
+    idx = menu.show()
+
+    if idx is None:
+        return None
+    if idx == 0:
+        return BACK
+    return clusters[idx - 1]
 
 
-def select_service(services: List[str]) -> Optional[str]:
+def select_service(services: List[str]) -> Union[str, BackSignal, None]:
     """Prompt user to select ECS service"""
     if not services:
         print("No services found in this cluster")
         return None
-    
-    choices = [
-        Choice(value=service, name=extract_name_from_arn(service))
-        for service in services
-    ]
-    
-    return inquirer.select(
-        message="Select ECS service:",
-        choices=choices,
-        max_height=10,
-    ).execute()
+
+    display_names = [extract_name_from_arn(s) for s in services]
+    menu = _create_menu(display_names, "Select ECS service (type to search):")
+    idx = menu.show()
+
+    if idx is None:
+        return None
+    if idx == 0:
+        return BACK
+    return services[idx - 1]
 
 
-def fuzzy_select_service(services: List[str]) -> Optional[str]:
+def fuzzy_select_service(services: List[str]) -> Union[str, BackSignal, None]:
     """Fuzzy search prompt for service selection."""
     if not services:
         print("No matching services found.")
         return None
 
-    choices = [
-        Choice(value=service, name=extract_name_from_arn(service))
-        for service in services
-    ]
+    display_names = [extract_name_from_arn(s) for s in services]
+    menu = _create_menu(display_names, "Multiple services found (type to search):")
+    idx = menu.show()
 
-    return inquirer.fuzzy(
-        message="Multiple services found, please select one:",
-        choices=choices,
-        max_height=10,
-    ).execute()
+    if idx is None:
+        return None
+    if idx == 0:
+        return BACK
+    return services[idx - 1]
 
 
-def select_task(tasks: List[dict]) -> Optional[dict]:
+def select_task(tasks: List[dict]) -> Union[dict, BackSignal, None]:
     """Prompt user to select task (if multiple running)"""
     if not tasks:
         print("No running tasks found for this service")
         return None
-    
+
     if len(tasks) == 1:
         return tasks[0]
-    
-    choices = [
-        Choice(
-            value=task,
-            name=f"{extract_name_from_arn(task['taskArn'])} (started: {task.get('startedAt', 'unknown')})"
-        )
-        for task in tasks
+
+    display_names = [
+        f"{extract_name_from_arn(t['taskArn'])} (started: {t.get('startedAt', 'unknown')})"
+        for t in tasks
     ]
-    
-    return inquirer.select(
-        message="Multiple tasks running. Select one:",
-        choices=choices,
-        max_height=10,
-    ).execute()
+    menu = _create_menu(display_names, "Multiple tasks running (type to search):")
+    idx = menu.show()
+
+    if idx is None:
+        return None
+    if idx == 0:
+        return BACK
+    return tasks[idx - 1]
 
 
-def select_container(containers: List[dict]) -> Optional[dict]:
+def select_container(containers: List[dict]) -> Union[dict, BackSignal, None]:
     """Prompt user to select container"""
     if not containers:
         print("No service containers found in this task")
         return None
-    
+
     if len(containers) == 1:
         return containers[0]
-    
-    choices = [
-        Choice(
-            value=container,
-            name=f"{container['name']} (status: {container.get('lastStatus', 'unknown')})"
-        )
-        for container in containers
+
+    display_names = [
+        f"{c['name']} (status: {c.get('lastStatus', 'unknown')})"
+        for c in containers
     ]
-    
-    return inquirer.select(
-        message="Multiple containers found. Select one:",
-        choices=choices,
-        max_height=10,
-    ).execute()
+    menu = _create_menu(display_names, "Multiple containers found (type to search):")
+    idx = menu.show()
+
+    if idx is None:
+        return None
+    if idx == 0:
+        return BACK
+    return containers[idx - 1]
 
 
-def confirm_container_exec() -> bool:
+def confirm_container_exec() -> Union[bool, BackSignal]:
     """Ask user if they want to exec into container"""
-    return inquirer.confirm(
-        message="Connect to container? (No = SSH to host only)",
-        default=True
-    ).execute()
+    options = [BACK_OPTION, "Yes - connect to container", "No - SSH to host only"]
+
+    menu = TerminalMenu(
+        options,
+        title="Connect to container?",
+        menu_cursor_style=("fg_cyan", "bold"),
+        menu_highlight_style=("bg_cyan", "fg_black"),
+        cursor_index=1,
+        quit_keys=("escape", "\x04"),
+    )
+    idx = menu.show()
+
+    if idx is None or idx == 0:
+        return BACK
+    return idx == 1

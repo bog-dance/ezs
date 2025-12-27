@@ -78,18 +78,19 @@ def start_ssh_session(instance_id: str, region: str):
 def start_container_session(instance_id: str, container_id: str, region: str):
     """Start SSM session and exec into Docker container"""
     console.print(f"[green]Starting session to container {container_id[:12]}...[/green]")
-    
-    # Build docker exec command (with sudo for permissions)
-    docker_command = f"sudo docker exec -it {container_id} bash"
-    
+
+    docker_command = f"sudo docker exec -it {container_id} bash || sudo docker exec -it {container_id} sh"
+
     try:
-        subprocess.run([
-            'aws', 'ssm', 'start-session',
-            '--target', instance_id,
-            '--region', region,
-            '--document-name', 'AWS-StartInteractiveCommand',
-            '--parameters', json.dumps({"command": [docker_command]})
-        ])
+        # Use shell=True to properly handle the complex command
+        cmd = (
+            f'aws ssm start-session '
+            f'--target {instance_id} '
+            f'--region {region} '
+            f'--document-name AWS-StartInteractiveCommand '
+            f'--parameters \'{{"command":["{docker_command}"]}}\''
+        )
+        subprocess.run(cmd, shell=True)
     except KeyboardInterrupt:
         console.print("\n[yellow]Session terminated[/yellow]")
     except Exception as e:

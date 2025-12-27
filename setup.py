@@ -16,10 +16,11 @@ setup(
         "boto3>=1.34.0",
         "rich>=13.7.0",
         "textual>=0.89.0",
+        "pyyaml>=6.0",
     ],
     entry_points={
         "console_scripts": [
-            "ezs=ecs_connect.main:main",
+            "ezs=ezs.main:main",
         ],
     },
     classifiers=[

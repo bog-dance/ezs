@@ -46,6 +46,12 @@ class ECSConnectApp(App):
     CSS = """
     Screen {
         background: #08060d;
+        overflow: hidden;
+        scrollbar-size: 0 0;
+    }
+
+    * {
+        scrollbar-size: 0 0;
     }
 
     #title {
@@ -106,9 +112,6 @@ class ECSConnectApp(App):
         width: 100%;
         background: #08060d;
         color: #8a7fa0;
-        scrollbar-size: 1 1;
-        scrollbar-color: #b0a7be;
-        scrollbar-background: #1a1520;
     }
 
     RegionBox > OptionList:focus {
@@ -118,9 +121,6 @@ class ECSConnectApp(App):
     #options {
         margin: 1;
         height: 100%;
-        scrollbar-size: 1 1;
-        scrollbar-color: #b0a7be;
-        scrollbar-background: #1a1520;
         background: #08060d;
     }
 
@@ -287,6 +287,16 @@ class ECSConnectApp(App):
             self.selected_task = self.resume_context.get('task')
             self.selected_container = self.resume_context.get('container')
             self._instance_id = self.resume_context.get('instance_id')
+
+            # Restore cached data
+            if 'services' in self.resume_context and self.resume_context['services'] is not None:
+                cluster_arn = self.selected_cluster['arn']
+                self.services = self.resume_context['services']
+                self.cached_services[cluster_arn] = self.services
+            if 'tasks' in self.resume_context and self.resume_context['tasks'] is not None:
+                self.tasks = self.resume_context['tasks']
+            if 'containers' in self.resume_context and self.resume_context['containers'] is not None:
+                self.containers = self.resume_context['containers']
 
             if self.selected_cluster:
                 self.aws = self.aws_client_factory(
@@ -641,12 +651,12 @@ class ECSConnectApp(App):
 
         # All available items (stored for filtering)
         self._all_ssh_items = [
-            ("container", "Container"),
-            ("ssh", "Host"),
+            ("container", "container"),
+            ("ssh", "host"),
         ]
         self._all_logs_items = [
-            ("logs_live", "Live logs"),
-            ("logs_download", "Download logs"),
+            ("logs_live", "live logs"),
+            ("logs_download", "download logs"),
         ]
 
         # Initially show all
@@ -1196,5 +1206,9 @@ def run_ecs_connect(clusters: List[dict], aws_client_class, profile: Optional[st
         app.result['task'] = app.selected_task
         app.result['container'] = app.selected_container
         app.result['instance_id'] = getattr(app, '_instance_id', None)
+        # Include cached data for faster resume
+        app.result['services'] = app.services
+        app.result['tasks'] = app.tasks
+        app.result['containers'] = app.containers
 
     return app.result

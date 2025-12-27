@@ -13,9 +13,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.align import Align
 from rich.text import Text
-from .config import REGIONS
+from .config import REGIONS, reload_regions
+from .config_manager import config_exists
 from .aws_client import AWSClient
 from .interactive import run_ecs_connect
+from .setup_wizard import run_setup_wizard
+from .live_logs import run_live_logs
+from .download_logs import run_download_logs
 from .ssm_session import (
     check_session_manager_plugin,
     start_ssh_session,
@@ -26,8 +30,7 @@ console = Console()
 
 
 def stream_live_logs(result: dict, profile: str = None):
-    """Stream live logs from CloudWatch"""
-    cluster = result['cluster']
+    """Stream live logs from CloudWatch with TUI"""
     task = result['task']
     container = result['container']
     region = result['region']
@@ -49,24 +52,17 @@ def stream_live_logs(result: dict, profile: str = None):
         console.print("[yellow]Make sure the container uses awslogs driver.[/yellow]")
         return
 
-    console.print(f"[green]Log group:[/green] {log_group}")
-    console.print(f"[green]Log stream:[/green] {log_stream}")
-    console.print("[dim]Press Ctrl+C to stop streaming[/dim]\n")
-
-    try:
-        for event in aws.stream_log_events(log_group, log_stream):
-            timestamp = event.get('timestamp', 0)
-            message = event.get('message', '')
-            dt = datetime.fromtimestamp(timestamp / 1000)
-            time_str = dt.strftime('%H:%M:%S')
-            console.print(f"[dim]{time_str}[/dim] {message}")
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Stopped streaming.[/yellow]")
+    # Run the Live Logs TUI
+    run_live_logs(
+        log_group=log_group,
+        log_stream=log_stream,
+        aws_client=aws,
+        container_name=container_name,
+    )
 
 
 def download_logs(result: dict, profile: str = None):
-    """Download logs from CloudWatch to ~/Downloads"""
-    cluster = result['cluster']
+    """Download logs from CloudWatch with TUI"""
     task = result['task']
     container = result['container']
     region = result['region']
@@ -89,76 +85,50 @@ def download_logs(result: dict, profile: str = None):
         console.print("[yellow]Make sure the container uses awslogs driver.[/yellow]")
         return
 
-    console.print(f"[green]Log group:[/green] {log_group}")
-    console.print(f"[green]Log stream:[/green] {log_stream}")
-
-    # Calculate time range
-    end_time = int(time.time() * 1000)
-    start_time = end_time - (minutes * 60 * 1000)
-
-    console.print(f"[cyan]Fetching logs from last {minutes} minutes...[/cyan]")
-
-    events = aws.get_log_events(log_group, log_stream, start_time=start_time, end_time=end_time, limit=10000)
-
-    if not events:
-        console.print("[yellow]No logs found in the specified time range.[/yellow]")
-        return
-
-    # Prepare download path
-    downloads_dir = Path.home() / "Downloads"
-    downloads_dir.mkdir(exist_ok=True)
-
     task_id = task.get('taskArn', '').split('/')[-1][:8]
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"ecs_logs_{container_name}_{task_id}_{timestamp}.log"
-    filepath = downloads_dir / filename
 
-    # Write logs to file
-    with open(filepath, 'w') as f:
-        for event in events:
-            ts = event.get('timestamp', 0)
-            message = event.get('message', '')
-            dt = datetime.fromtimestamp(ts / 1000)
-            time_str = dt.strftime('%Y-%m-%d %H:%M:%S')
-            f.write(f"{time_str} {message}\n")
-
-    # Show centered success message
-    message = Text()
-    message.append("✓ Download complete\n\n", style="bold green")
-    message.append(f"{len(events)}", style="bold cyan")
-    message.append(" log entries\n\n", style="")
-    message.append("Saved to:\n", style="dim")
-    message.append(str(filepath), style="bold")
-    message.append("\n\n", style="")
-    message.append("Press Enter to continue...", style="dim italic")
-
-    panel = Panel(
-        Align.center(message),
-        border_style="green",
-        padding=(1, 4),
+    # Run the Download Logs TUI
+    run_download_logs(
+        log_group=log_group,
+        log_stream=log_stream,
+        aws_client=aws,
+        container_name=container_name,
+        task_id=task_id,
+        minutes=minutes,
     )
-    console.print()
-    console.print(Align.center(panel))
-    console.print()
-
-    # Wait for user to press Enter
-    input()
 
 
 def main():
     """Main CLI workflow"""
     parser = argparse.ArgumentParser(description="EZS - ECS Container Access Tool")
     parser.add_argument('--profile', type=str, help='AWS profile to use')
+    parser.add_argument('--configure', action='store_true', help='Configure AWS regions for ECS discovery')
     args = parser.parse_args()
-
 
     # Check prerequisites
     if not check_session_manager_plugin():
         sys.exit(1)
 
-    # Fetch clusters from all regions
+    # Check if first run or --configure flag
+    if args.configure or not config_exists():
+        if not config_exists():
+            console.print("[cyan]First run detected. Starting setup wizard...[/cyan]")
+
+        result = run_setup_wizard(profile=args.profile)
+
+        if result is None:
+            console.print("[yellow]Setup cancelled.[/yellow]")
+            sys.exit(0)
+
+        # Reload regions after setup
+        regions = reload_regions()
+        console.print(f"[green]Configuration saved. {len(result)} regions configured.[/green]")
+    else:
+        regions = REGIONS
+
+    # Fetch clusters from configured regions
     console.print("[cyan]Fetching ECS clusters from all regions...[/cyan]")
-    clusters = AWSClient.list_all_clusters(REGIONS, profile=args.profile)
+    clusters = AWSClient.list_all_clusters(regions, profile=args.profile)
 
     if not clusters:
         console.print("[red]No ECS clusters found in any region.[/red]")
@@ -186,6 +156,10 @@ def main():
             'task': result.get('task'),
             'container': result.get('container'),
             'instance_id': result.get('instance_id'),
+            # Cached data for faster resume
+            'services': result.get('services'),
+            'tasks': result.get('tasks'),
+            'containers': result.get('containers'),
         }
 
         # Start the appropriate session

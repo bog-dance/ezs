@@ -21,7 +21,6 @@ from .interactive import (
 )
 from .ssm_session import (
     check_session_manager_plugin,
-    get_container_id,
     start_ssh_session,
     start_container_session
 )
@@ -162,11 +161,11 @@ def main():
             if not exec_container:
                 start_ssh_session(instance_id, region)
             else:
-                console.print("[cyan]Getting container ID from host...[/cyan]")
-                container_id = get_container_id(instance_id, container['name'], region)
+                # Use runtimeId from ECS (docker container ID)
+                container_id = container.get('runtimeId')
 
                 if not container_id:
-                    console.print("[yellow]Could not get container ID. Falling back to SSH.[/yellow]")
+                    console.print("[yellow]Container ID not available. Falling back to SSH.[/yellow]")
                     start_ssh_session(instance_id, region)
                 else:
                     start_container_session(instance_id, container_id, region)

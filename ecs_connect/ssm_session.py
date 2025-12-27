@@ -2,17 +2,33 @@
 
 import subprocess
 import json
+import os
+import sys
 from typing import Optional
 from rich.console import Console
 
 console = Console()
 
 
+def reset_terminal():
+    """Reset terminal state after SSM session"""
+    try:
+        # Reset terminal to sane state
+        os.system('stty sane 2>/dev/null')
+        # Clear any pending input
+        if sys.stdin.isatty():
+            import termios
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:
+        pass
+
+
 def get_container_id(instance_id: str, container_name: str, region: str) -> Optional[str]:
     """Get Docker container ID from EC2 instance via SSM"""
     try:
         # Execute docker ps command via SSM (with sudo for permissions)
-        command = f"sudo docker ps --filter 'name={container_name}' --format '{{{{.ID}}}}'"
+        # Use regex anchor for exact match: ^/name$ (docker adds / prefix to names)
+        command = f"sudo docker ps --filter 'name=^/{container_name}$' --format '{{{{.ID}}}}'"
         
         result = subprocess.run([
             'aws', 'ssm', 'send-command',
@@ -62,7 +78,7 @@ def get_container_id(instance_id: str, container_name: str, region: str) -> Opti
 def start_ssh_session(instance_id: str, region: str):
     """Start SSM session to EC2 instance (SSH mode)"""
     console.print(f"[green]Starting SSH session to {instance_id}...[/green]")
-    
+
     try:
         subprocess.run([
             'aws', 'ssm', 'start-session',
@@ -73,30 +89,34 @@ def start_ssh_session(instance_id: str, region: str):
         console.print("\n[yellow]Session terminated[/yellow]")
     except Exception as e:
         console.print(f"[red]Error starting session: {e}[/red]")
+    finally:
+        reset_terminal()
 
 
 def start_container_session(instance_id: str, container_id: str, region: str):
     """Start SSM session and exec into Docker container"""
+    # Take only first container ID if multiple returned, and clean it
+    container_id = container_id.strip().split('\n')[0].split()[0]
     console.print(f"[green]Starting session to container {container_id[:12]}...[/green]")
 
-    docker_command = f"sudo docker exec -it {container_id} bash || sudo docker exec -it {container_id} sh"
+    docker_command = f"sudo docker exec -it {container_id} /bin/sh"
 
     try:
-        # Use shell=True to properly handle the complex command
-        cmd = (
-            f'aws ssm start-session '
-            f'--target {instance_id} '
-            f'--region {region} '
-            f'--document-name AWS-StartInteractiveCommand '
-            f'--parameters \'{{"command":["{docker_command}"]}}\''
-        )
-        subprocess.run(cmd, shell=True)
+        subprocess.run([
+            'aws', 'ssm', 'start-session',
+            '--target', instance_id,
+            '--region', region,
+            '--document-name', 'AWS-StartInteractiveCommand',
+            '--parameters', f'{{"command":["{docker_command}"]}}'
+        ])
     except KeyboardInterrupt:
         console.print("\n[yellow]Session terminated[/yellow]")
     except Exception as e:
         console.print(f"[red]Error starting container session: {e}[/red]")
         console.print("[yellow]Falling back to regular SSH session...[/yellow]")
         start_ssh_session(instance_id, region)
+    finally:
+        reset_terminal()
 
 
 def check_session_manager_plugin() -> bool:

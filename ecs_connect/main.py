@@ -4,6 +4,7 @@ ECS Connect - Interactive CLI tool for connecting to ECS containers via SSM
 """
 
 import sys
+import argparse
 from rich.console import Console
 from .config import REGIONS
 from .aws_client import AWSClient
@@ -13,7 +14,8 @@ from .interactive import (
     select_service,
     select_task,
     select_container,
-    confirm_container_exec
+    confirm_container_exec,
+    fuzzy_select_service
 )
 from .ssm_session import (
     check_session_manager_plugin,
@@ -24,40 +26,51 @@ from .ssm_session import (
 
 console = Console()
 
-
 def main():
     """Main CLI workflow"""
+    parser = argparse.ArgumentParser(description="ECS Connect Tool")
+    parser.add_argument('--profile', type=str, help='AWS profile to use')
+    parser.add_argument('--service', type=str, help='Filter services by name')
+    args = parser.parse_args()
+
     console.print("[bold blue]ECS Connect Tool[/bold blue]")
     console.print()
-    
+
     # Check prerequisites
     if not check_session_manager_plugin():
         sys.exit(1)
-    
+
     # Step 1: Select region
     region = select_region(REGIONS)
     if not region:
         console.print("[red]No region selected. Exiting.[/red]")
         sys.exit(0)
-    
+
     console.print(f"[dim]Selected region: {region}[/dim]\n")
-    
+
     # Initialize AWS client
-    aws = AWSClient(region=region)
-    
+    aws = AWSClient(region=region, profile=args.profile)
+
     # Step 2: Select cluster
     console.print("[cyan]Fetching ECS clusters...[/cyan]")
     clusters = aws.list_clusters()
     cluster = select_cluster(clusters)
     if not cluster:
         sys.exit(0)
-    
+
     console.print(f"[dim]Selected cluster: {cluster.split('/')[-1]}[/dim]\n")
-    
+
     # Step 3: Select service
     console.print("[cyan]Fetching services...[/cyan]")
-    services = aws.list_services(cluster)
-    service = select_service(services)
+    services = aws.list_services(cluster, service_name=args.service)
+
+    if args.service and len(services) == 1:
+        service = services[0]
+    elif args.service and len(services) > 1:
+        service = fuzzy_select_service(services)
+    else:
+        service = select_service(services)
+
     if not service:
         sys.exit(0)
     

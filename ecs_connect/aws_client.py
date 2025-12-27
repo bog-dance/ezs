@@ -26,11 +26,28 @@ class AWSClient:
             console.print(f"[red]Error listing clusters: {e}[/red]")
             return []
 
-    def list_services(self, cluster: str) -> List[str]:
-        """List all services in ECS cluster"""
+    def list_services(self, cluster: str, service_name: Optional[str] = None) -> List[str]:
+        """List all services in ECS cluster, optionally filtering by name."""
         try:
-            response = self.ecs.list_services(cluster=cluster)
-            return response.get('serviceArns', [])
+            paginator = self.ecs.get_paginator('list_services')
+            pages = paginator.paginate(cluster=cluster)
+
+            service_arns = []
+            for page in pages:
+                service_arns.extend(page.get('serviceArns', []))
+
+            if not service_name:
+                service_arns.sort(key=extract_name_from_arn)
+                return service_arns
+
+            filtered_arns = [
+                arn for arn in service_arns
+                if service_name.lower() in extract_name_from_arn(arn).lower()
+            ]
+
+            filtered_arns.sort(key=extract_name_from_arn)
+            return filtered_arns
+
         except Exception as e:
             console.print(f"[red]Error listing services: {e}[/red]")
             return []

@@ -53,6 +53,24 @@ def select_service(services: List[str]) -> Optional[str]:
     ).execute()
 
 
+def fuzzy_select_service(services: List[str]) -> Optional[str]:
+    """Fuzzy search prompt for service selection."""
+    if not services:
+        print("No matching services found.")
+        return None
+
+    choices = [
+        Choice(value=service, name=extract_name_from_arn(service))
+        for service in services
+    ]
+
+    return inquirer.fuzzy(
+        message="Multiple services found, please select one:",
+        choices=choices,
+        multiselect=False
+    ).execute()
+
+
 def select_task(tasks: List[dict]) -> Optional[dict]:
     """Prompt user to select task (if multiple running)"""
     if not tasks:

@@ -21,6 +21,7 @@ class AWSClient:
         self.ecs = session.client('ecs')
         self.ec2 = session.client('ec2')
         self.ssm = session.client('ssm')
+        self.logs = session.client('logs')
         self.region = region
 
     def set_region(self, region: str):
@@ -243,6 +244,116 @@ class AWSClient:
         except Exception as e:
             console.print(f"[red]Error checking SSM access: {e}[/red]")
             return False
+
+    def get_log_group_for_task(self, task: Dict, container_name: str) -> Optional[str]:
+        """Get CloudWatch log group for a task's container"""
+        try:
+            # Get task definition ARN
+            task_def_arn = task.get('taskDefinitionArn')
+            if not task_def_arn:
+                return None
+
+            # Describe task definition
+            response = self.ecs.describe_task_definition(taskDefinition=task_def_arn)
+            task_def = response.get('taskDefinition', {})
+
+            # Find container definition
+            for container_def in task_def.get('containerDefinitions', []):
+                if container_def.get('name') == container_name:
+                    log_config = container_def.get('logConfiguration', {})
+                    if log_config.get('logDriver') == 'awslogs':
+                        options = log_config.get('options', {})
+                        log_group = options.get('awslogs-group')
+                        return log_group
+
+            return None
+        except Exception as e:
+            console.print(f"[red]Error getting log group: {e}[/red]")
+            return None
+
+    def get_log_stream_for_task(self, task: Dict, container_name: str) -> Optional[str]:
+        """Get CloudWatch log stream name for a task's container"""
+        try:
+            task_def_arn = task.get('taskDefinitionArn')
+            task_id = task.get('taskArn', '').split('/')[-1]
+
+            if not task_def_arn or not task_id:
+                return None
+
+            response = self.ecs.describe_task_definition(taskDefinition=task_def_arn)
+            task_def = response.get('taskDefinition', {})
+
+            for container_def in task_def.get('containerDefinitions', []):
+                if container_def.get('name') == container_name:
+                    log_config = container_def.get('logConfiguration', {})
+                    if log_config.get('logDriver') == 'awslogs':
+                        options = log_config.get('options', {})
+                        prefix = options.get('awslogs-stream-prefix', '')
+                        # Log stream format: prefix/container-name/task-id
+                        if prefix:
+                            return f"{prefix}/{container_name}/{task_id}"
+                        return f"{container_name}/{task_id}"
+
+            return None
+        except Exception as e:
+            console.print(f"[red]Error getting log stream: {e}[/red]")
+            return None
+
+    def get_log_events(self, log_group: str, log_stream: str,
+                       start_time: Optional[int] = None,
+                       end_time: Optional[int] = None,
+                       limit: int = 1000) -> List[Dict]:
+        """Get log events from CloudWatch"""
+        try:
+            kwargs = {
+                'logGroupName': log_group,
+                'logStreamName': log_stream,
+                'startFromHead': False,
+                'limit': limit
+            }
+            if start_time:
+                kwargs['startTime'] = start_time
+            if end_time:
+                kwargs['endTime'] = end_time
+
+            response = self.logs.get_log_events(**kwargs)
+            return response.get('events', [])
+        except Exception as e:
+            console.print(f"[red]Error getting log events: {e}[/red]")
+            return []
+
+    def stream_log_events(self, log_group: str, log_stream: str):
+        """Generator that yields new log events (for live streaming)"""
+        import time
+        next_token = None
+
+        while True:
+            try:
+                kwargs = {
+                    'logGroupName': log_group,
+                    'logStreamName': log_stream,
+                    'startFromHead': False,
+                    'limit': 100
+                }
+                if next_token:
+                    kwargs['nextToken'] = next_token
+
+                response = self.logs.get_log_events(**kwargs)
+                events = response.get('events', [])
+                new_token = response.get('nextForwardToken')
+
+                for event in events:
+                    yield event
+
+                # If no new events and token hasn't changed, wait
+                if not events or new_token == next_token:
+                    time.sleep(1)
+
+                next_token = new_token
+
+            except Exception as e:
+                console.print(f"[red]Error streaming logs: {e}[/red]")
+                break
 
 
 def extract_name_from_arn(arn: str) -> str:

@@ -4,10 +4,10 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="ecs-connect",
+    name="ezs",
     version="0.1.0",
     author="Your Name",
-    description="Interactive CLI tool for connecting to ECS containers via SSM",
+    description="EZS - ECS, but easy. Easy ECS task management TUI",
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=find_packages(),
@@ -19,7 +19,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "ecs-connect=ecs_connect.main:main",
+            "ezs=ecs_connect.main:main",
         ],
     },
     classifiers=[

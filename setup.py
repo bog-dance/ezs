@@ -14,8 +14,8 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "boto3>=1.34.0",
-        "simple-term-menu>=1.6.0",
         "rich>=13.7.0",
+        "textual>=0.89.0",
     ],
     entry_points={
         "console_scripts": [

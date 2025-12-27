@@ -8,17 +8,7 @@ import argparse
 from rich.console import Console
 from .config import REGIONS
 from .aws_client import AWSClient
-from .interactive import (
-    select_region,
-    select_cluster,
-    select_service,
-    select_task,
-    select_container,
-    confirm_container_exec,
-    fuzzy_select_service,
-    BACK,
-    BackSignal,
-)
+from .interactive import run_ecs_connect
 from .ssm_session import (
     check_session_manager_plugin,
     start_ssh_session,
@@ -29,151 +19,55 @@ console = Console()
 
 
 def main():
-    """Main CLI workflow with back navigation"""
+    """Main CLI workflow"""
     parser = argparse.ArgumentParser(description="ECS Connect Tool")
     parser.add_argument('--profile', type=str, help='AWS profile to use')
-    parser.add_argument('--service', type=str, help='Filter services by name')
     args = parser.parse_args()
 
-    console.print("[bold blue]ECS Connect Tool[/bold blue]")
-    console.print()
 
     # Check prerequisites
     if not check_session_manager_plugin():
         sys.exit(1)
 
-    # State variables
-    region = None
-    aws = None
-    clusters = None
-    cluster = None
-    services = None
-    service = None
-    tasks = None
-    task = None
-    instance_id = None
-    containers = None
-    container = None
+    # Fetch clusters from all regions
+    console.print("[cyan]Fetching ECS clusters from all regions...[/cyan]")
+    clusters = AWSClient.list_all_clusters(REGIONS, profile=args.profile)
 
-    step = 1
+    if not clusters:
+        console.print("[red]No ECS clusters found in any region.[/red]")
+        sys.exit(1)
+
+    # Run the interactive UI (stays in Textual until SSH session)
+    last_cluster = None
 
     while True:
-        if step == 1:
-            # Select region
-            region = select_region(REGIONS)
-            if not region:
-                console.print("[yellow]Exiting.[/yellow]")
-                sys.exit(0)
-            console.print(f"[dim]Selected region: {region}[/dim]\n")
-            aws = AWSClient(region=region, profile=args.profile)
-            step = 2
+        result = run_ecs_connect(
+            clusters=clusters,
+            aws_client_class=AWSClient,
+            profile=args.profile,
+            initial_cluster=last_cluster
+        )
 
-        elif step == 2:
-            # Select cluster
-            console.print("[cyan]Fetching ECS clusters...[/cyan]")
-            clusters = aws.list_clusters()
-            cluster = select_cluster(clusters)
-            if cluster is None:
-                sys.exit(0)
-            if isinstance(cluster, BackSignal):
-                step = 1
-                continue
-            console.print(f"[dim]Selected cluster: {cluster.split('/')[-1]}[/dim]\n")
-            step = 3
+        if result is None:
+            console.print("[yellow]Exiting.[/yellow]")
+            sys.exit(0)
 
-        elif step == 3:
-            # Select service
-            console.print("[cyan]Fetching services...[/cyan]")
-            services = aws.list_services(cluster, service_name=args.service)
+        # Remember cluster for next iteration
+        last_cluster = result.get('cluster')
 
-            if args.service and len(services) == 1:
-                service = services[0]
-            elif args.service and len(services) > 1:
-                service = fuzzy_select_service(services)
+        # Start the appropriate session
+        if result['type'] == 'ssh':
+            start_ssh_session(result['instance_id'], result['region'])
+        elif result['type'] == 'container':
+            if result.get('container_id'):
+                start_container_session(
+                    result['instance_id'],
+                    result['container_id'],
+                    result['region']
+                )
             else:
-                service = select_service(services)
-
-            if service is None:
-                sys.exit(0)
-            if isinstance(service, BackSignal):
-                step = 2
-                continue
-            console.print(f"[dim]Selected service: {service.split('/')[-1]}[/dim]\n")
-            step = 4
-
-        elif step == 4:
-            # Select task
-            console.print("[cyan]Fetching running tasks...[/cyan]")
-            tasks = aws.list_tasks(cluster, service)
-            if not tasks:
-                console.print("[red]No running tasks found.[/red]")
-                step = 3
-                continue
-
-            task = select_task(tasks)
-            if task is None:
-                sys.exit(0)
-            if isinstance(task, BackSignal):
-                step = 3
-                continue
-            console.print(f"[dim]Selected task: {task['taskArn'].split('/')[-1]}[/dim]\n")
-            step = 5
-
-        elif step == 5:
-            # Get instance and containers
-            console.print("[cyan]Getting container instance...[/cyan]")
-            instance_id = aws.get_container_instance_id(cluster, task)
-            if not instance_id:
-                console.print("[red]Could not determine EC2 instance.[/red]")
-                step = 4
-                continue
-
-            console.print(f"[dim]Instance ID: {instance_id}[/dim]\n")
-
-            if not aws.verify_ssm_access(instance_id):
-                console.print(f"[red]Instance {instance_id} is not accessible via SSM.[/red]")
-                console.print("[yellow]Make sure the instance has SSM agent installed and IAM role attached.[/yellow]")
-                step = 4
-                continue
-
-            containers = aws.get_task_containers(task, exclude_agent=True)
-            if not containers:
-                console.print("[yellow]No service containers found (only ecs-agent). Connecting to host.[/yellow]")
-                start_ssh_session(instance_id, region)
-                sys.exit(0)
-
-            container = select_container(containers)
-            if container is None:
-                sys.exit(0)
-            if isinstance(container, BackSignal):
-                step = 4
-                continue
-            console.print(f"[dim]Selected container: {container['name']}[/dim]\n")
-            step = 6
-
-        elif step == 6:
-            # Confirm and connect
-            exec_container = confirm_container_exec()
-            if isinstance(exec_container, BackSignal):
-                step = 5
-                continue
-
-            if not exec_container:
-                start_ssh_session(instance_id, region)
-            else:
-                # Use runtimeId from ECS (docker container ID)
-                container_id = container.get('runtimeId')
-
-                if not container_id:
-                    console.print("[yellow]Container ID not available. Falling back to SSH.[/yellow]")
-                    start_ssh_session(instance_id, region)
-                else:
-                    start_container_session(instance_id, container_id, region)
-
-            # After session ends, return to service selection
-            console.print("\n[dim]Session ended. Returning to menu...[/dim]\n")
-            step = 3
-            continue
+                console.print("[yellow]Container ID not available. Falling back to SSH.[/yellow]")
+                start_ssh_session(result['instance_id'], result['region'])
 
 
 if __name__ == '__main__':

@@ -77,7 +77,7 @@ def get_container_id(instance_id: str, container_name: str, region: str) -> Opti
 
 def start_ssh_session(instance_id: str, region: str):
     """Start SSM session to EC2 instance (SSH mode)"""
-    console.print(f"[green]Starting SSH session to {instance_id}...[/green]")
+    console.print(f"[green]Connecting to {instance_id}...[/green]")
 
     try:
         subprocess.run([
@@ -86,7 +86,7 @@ def start_ssh_session(instance_id: str, region: str):
             '--region', region
         ])
     except KeyboardInterrupt:
-        console.print("\n[yellow]Session terminated[/yellow]")
+        pass
     except Exception as e:
         console.print(f"[red]Error starting session: {e}[/red]")
     finally:
@@ -97,7 +97,7 @@ def start_container_session(instance_id: str, container_id: str, region: str):
     """Start SSM session and exec into Docker container"""
     # Take only first container ID if multiple returned, and clean it
     container_id = container_id.strip().split('\n')[0].split()[0]
-    console.print(f"[green]Starting session to container {container_id[:12]}...[/green]")
+    console.print(f"[green]Connecting to container {container_id[:12]}...[/green]")
 
     docker_command = f"sudo docker exec -it {container_id} /bin/sh"
 
@@ -110,7 +110,7 @@ def start_container_session(instance_id: str, container_id: str, region: str):
             '--parameters', f'{{"command":["{docker_command}"]}}'
         ])
     except KeyboardInterrupt:
-        console.print("\n[yellow]Session terminated[/yellow]")
+        pass
     except Exception as e:
         console.print(f"[red]Error starting container session: {e}[/red]")
         console.print("[yellow]Falling back to regular SSH session...[/yellow]")

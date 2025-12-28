@@ -1,29 +1,31 @@
-"""Live Logs TUI with filtering by log level"""
+"""Live Logs TUI with filtering by log level and container"""
 
 import re
+import time
+import heapq
 from datetime import datetime
-from typing import Optional, List, Generator
+from typing import Optional, List, Generator, Dict, Any
 from textual.app import App, ComposeResult
 from textual.widgets import Static, RichLog
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.binding import Binding
 from textual.worker import Worker, WorkerState
 
 from .aws_client import AWSClient
 
 
-# Log level patterns for Django and common formats
+# Log level patterns
 LOG_LEVEL_PATTERNS = [
-    # Django format: "2025-12-27 16:16:59,569 WARNING django.request"
     re.compile(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[,\.]\d+\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+'),
-    # Word boundary match: " WARNING " or " ERROR " etc
     re.compile(r'\s(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s'),
-    # Standard format: "[WARNING]" or "[ERROR]" etc
     re.compile(r'\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]', re.IGNORECASE),
-    # Simple format: "WARNING:" or "ERROR:" etc
     re.compile(r'\b(DEBUG|INFO|WARNING|ERROR|CRITICAL):', re.IGNORECASE),
-    # Python logging: "WARNING -" or "ERROR -"
     re.compile(r'\b(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+-', re.IGNORECASE),
+]
+
+# Container colors for prefix
+CONTAINER_COLORS = [
+    "cyan", "green", "magenta", "blue", "yellow", "red"
 ]
 
 
@@ -37,7 +39,7 @@ def parse_log_level(message: str) -> str:
 
 
 class LiveLogsApp(App):
-    """Live logs viewer with filtering"""
+    """Live logs viewer with filtering by level and container"""
 
     CSS = """
     * {
@@ -85,30 +87,40 @@ class LiveLogsApp(App):
         text-style: bold;
     }
 
-    #btn-error.active {
-        background: #e06c75;
+    .container-btn {
+        width: auto;
+        min-width: 10;
+        height: 1;
+        padding: 0 1;
+        color: #6a6080;
+        background: #2a2536;
+        content-align: center middle;
+        margin: 0 1 0 0;
     }
 
-    #btn-warning.active {
-        background: #e5c07b;
+    .container-btn.active {
         color: #08060d;
+        background: #8fa1b3;
+        text-style: bold;
     }
 
-    #btn-info.active {
-        background: #61afef;
-        color: #08060d;
-    }
-
-    #btn-debug.active {
-        background: #6a6080;
-        color: #08060d;
-    }
+    #btn-error.active { background: #e06c75; }
+    #btn-warning.active { background: #e5c07b; color: #08060d; }
+    #btn-info.active { background: #61afef; color: #08060d; }
+    #btn-debug.active { background: #6a6080; color: #08060d; }
 
     #info {
         width: 1fr;
         padding: 0 1;
         color: #6a6080;
         text-align: right;
+    }
+
+    #container-bar {
+        dock: bottom;
+        height: 1;
+        background: #2a2536;
+        layout: horizontal;
     }
 
     .help-overlay {
@@ -155,31 +167,56 @@ class LiveLogsApp(App):
         Binding("d", "filter_debug", "Debug", show=True),
         Binding("q", "quit", "Quit", show=True),
         Binding("escape", "quit", "Quit", show=False),
-        Binding("left", "quit", "Quit", show=False),
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 
     def __init__(
         self,
-        log_group: str,
-        log_stream: str,
+        log_sources: List[Dict], # [{'container': name, 'log_group': g, 'log_stream': s}]
         aws_client: AWSClient,
-        container_name: str = "",
+        title: str = "Live Logs",
     ):
         super().__init__()
-        self.log_group = log_group
-        self.log_stream = log_stream
+        self.log_sources = log_sources
         self.aws = aws_client
-        self.container_name = container_name
+        self.app_title = title
+
         self.current_filter = "ALL"  # ALL, DEBUG, INFO, WARNING, ERROR
-        self._log_buffer: List[dict] = []  # Store all logs for re-filtering
+        self.container_filter = None # None (All) or container_name
+
+        self._log_buffer: List[dict] = []
         self._streaming = False
         self._total_count = 0
         self._shown_count = 0
 
+        # Assign colors to containers
+        self.container_colors = {}
+        for i, source in enumerate(log_sources):
+            color = CONTAINER_COLORS[i % len(CONTAINER_COLORS)]
+            self.container_colors[source['container']] = color
+
+        # Map shortcuts (1-9) to containers
+        self.container_shortcuts = {}
+        for i, source in enumerate(log_sources):
+            if i < 9:
+                self.container_shortcuts[str(i+1)] = source['container']
+
     def compose(self) -> ComposeResult:
-        yield Static(f"Live Logs: {self.container_name}", id="title")
+        yield Static(self.app_title, id="title")
         yield RichLog(id="log-view", highlight=True, markup=True)
+
+        # Container Filter Bar (only if multiple containers)
+        if len(self.log_sources) > 1:
+            buttons = [Static("\\[A]ll", id="btn-cont-all", classes="container-btn active")]
+            for i, source in enumerate(self.log_sources):
+                name = source['container']
+                shortcut = str(i + 1) if i < 9 else ""
+                label = f"\\[{shortcut}]{name}" if shortcut else name
+                buttons.append(Static(label, id=f"btn-cont-{name}", classes="container-btn"))
+
+            yield Horizontal(*buttons, id="container-bar")
+
+        # Log Level Bar
         yield Container(
             Static("\\[A]ll", id="btn-all", classes="filter-btn active"),
             Static("\\[E]rror", id="btn-error", classes="filter-btn"),
@@ -204,37 +241,73 @@ class LiveLogsApp(App):
         )
 
     def _stream_logs(self) -> None:
-        """Worker: stream logs from CloudWatch"""
-        import time
+        """Worker: stream logs from multiple CloudWatch streams"""
         try:
-            next_token = None
+            # Initialize state for each stream
+            streams_state = []
+            for source in self.log_sources:
+                streams_state.append({
+                    'source': source,
+                    'next_token': None,
+                    'buffer': [],
+                    'done': False
+                })
+
             while self._streaming:
-                kwargs = {
-                    'logGroupName': self.log_group,
-                    'logStreamName': self.log_stream,
-                    'startFromHead': False,
-                    'limit': 100
-                }
-                if next_token:
-                    kwargs['nextToken'] = next_token
+                any_data = False
 
-                response = self.aws.logs.get_log_events(**kwargs)
-                events = response.get('events', [])
-                new_token = response.get('nextForwardToken')
-
-                for event in events:
+                # Fetch data for all streams
+                for state in streams_state:
                     if not self._streaming:
                         return
-                    self.call_from_thread(self._add_log_event, event)
 
-                # Short sleeps to allow quick exit
-                if not events or new_token == next_token:
-                    for _ in range(10):  # 1 second total, but check every 0.1s
+                    # If buffer empty, fetch more
+                    if not state['buffer']:
+                        kwargs = {
+                            'logGroupName': state['source']['log_group'],
+                            'logStreamName': state['source']['log_stream'],
+                            'startFromHead': False,
+                            'limit': 20
+                        }
+                        if state['next_token']:
+                            kwargs['nextToken'] = state['next_token']
+
+                        response = self.aws.logs.get_log_events(**kwargs)
+                        events = response.get('events', [])
+                        new_token = response.get('nextForwardToken')
+
+                        if events:
+                            any_data = True
+                            for event in events:
+                                event['container'] = state['source']['container']
+                            state['buffer'].extend(events)
+
+                        state['next_token'] = new_token
+
+                # Merge sort / emit events in order
+                # Simple approach: Collect all available events from buffers, sort by timestamp
+                # Note: CloudWatch logs are roughly ordered but multi-stream needs alignment
+
+                all_events = []
+                for state in streams_state:
+                    all_events.extend(state['buffer'])
+                    state['buffer'] = [] # Clear buffer after moving to temp list
+
+                if all_events:
+                    # Sort by timestamp
+                    all_events.sort(key=lambda x: x.get('timestamp', 0))
+
+                    for event in all_events:
                         if not self._streaming:
                             return
+                        self.call_from_thread(self._add_log_event, event)
+
+                if not any_data:
+                    # Sleep if no new data across all streams
+                    for _ in range(10):
+                        if not self._streaming: return
                         time.sleep(0.1)
 
-                next_token = new_token
         except Exception as e:
             if self._streaming:
                 self.call_from_thread(self._show_error, str(e))
@@ -243,32 +316,31 @@ class LiveLogsApp(App):
         """Add a log event to the buffer and display if matches filter"""
         timestamp = event.get('timestamp', 0)
         message = event.get('message', '')
+        container = event.get('container', '')
         level = parse_log_level(message)
 
         log_entry = {
             'timestamp': timestamp,
             'message': message,
             'level': level,
+            'container': container
         }
         self._log_buffer.append(log_entry)
         self._total_count += 1
 
-        if self._matches_filter(level):
+        if self._matches_filter(level, container):
             self._display_log(log_entry)
             self._shown_count += 1
 
         self._update_info()
 
-    def _matches_filter(self, level: str) -> bool:
-        """Check if log level matches current filter.
+    def _matches_filter(self, level: str, container: str) -> bool:
+        """Check if log entry matches current filters"""
+        # Container filter
+        if self.container_filter and container != self.container_filter:
+            return False
 
-        Filter shows selected level and MORE SEVERE levels:
-        - ERROR: only ERROR, CRITICAL
-        - WARNING: WARNING, ERROR, CRITICAL
-        - INFO: INFO, WARNING, ERROR, CRITICAL
-        - DEBUG: everything (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        - ALL: everything
-        """
+        # Level filter
         if self.current_filter == "ALL":
             return True
         if self.current_filter == "ERROR":
@@ -278,7 +350,7 @@ class LiveLogsApp(App):
         if self.current_filter == "INFO":
             return level in ("INFO", "WARNING", "ERROR", "CRITICAL")
         if self.current_filter == "DEBUG":
-            return True  # Show everything including DEBUG
+            return True
         return True
 
     def _display_log(self, log_entry: dict) -> None:
@@ -287,6 +359,7 @@ class LiveLogsApp(App):
         timestamp = log_entry['timestamp']
         message = log_entry['message']
         level = log_entry['level']
+        container = log_entry['container']
 
         dt = datetime.fromtimestamp(timestamp / 1000)
         time_str = dt.strftime('%H:%M:%S')
@@ -301,12 +374,18 @@ class LiveLogsApp(App):
         }
         color = level_colors.get(level, 'white')
 
-        log_view.write(f"[dim]{time_str}[/dim] [{color}]{message}[/{color}]")
+        # Prefix with container name if showing multiple
+        prefix = ""
+        if not self.container_filter and len(self.log_sources) > 1:
+            cont_color = self.container_colors.get(container, "white")
+            prefix = f"[{cont_color}][{container}][/{cont_color}] "
+
+        log_view.write(f"[dim]{time_str}[/dim] {prefix}[{color}]{message}[/{color}]")
 
     def _update_info(self) -> None:
         """Update info in status bar"""
         info = self.query_one("#info", Static)
-        if self.current_filter == "ALL":
+        if self.current_filter == "ALL" and not self.container_filter:
             info.update(f"{self._total_count} logs")
         else:
             info.update(f"{self._shown_count}/{self._total_count} logs")
@@ -316,11 +395,10 @@ class LiveLogsApp(App):
         log_view = self.query_one("#log-view", RichLog)
         log_view.write(f"[red]Error: {error}[/red]")
 
-    def _set_filter(self, filter_name: str) -> None:
-        """Set filter and refresh display"""
+    def _set_level_filter(self, filter_name: str) -> None:
+        """Set level filter and refresh"""
         self.current_filter = filter_name
 
-        # Update button styles
         buttons = {
             "ALL": "#btn-all",
             "DEBUG": "#btn-debug",
@@ -330,13 +408,41 @@ class LiveLogsApp(App):
         }
 
         for name, btn_id in buttons.items():
-            btn = self.query_one(btn_id, Static)
-            if name == filter_name:
-                btn.add_class("active")
-            else:
-                btn.remove_class("active")
+            try:
+                btn = self.query_one(btn_id, Static)
+                if name == filter_name:
+                    btn.add_class("active")
+                else:
+                    btn.remove_class("active")
+            except Exception:
+                pass
 
-        # Refresh log display
+        self._refresh_logs()
+
+    def _set_container_filter(self, container_name: Optional[str]) -> None:
+        """Set container filter and refresh"""
+        self.container_filter = container_name
+
+        # Update buttons
+        try:
+            # All button
+            btn_all = self.query_one("#btn-cont-all", Static)
+            if container_name is None:
+                btn_all.add_class("active")
+            else:
+                btn_all.remove_class("active")
+
+            # Individual buttons
+            for source in self.log_sources:
+                name = source['container']
+                btn = self.query_one(f"#btn-cont-{name}", Static)
+                if name == container_name:
+                    btn.add_class("active")
+                else:
+                    btn.remove_class("active")
+        except Exception:
+            pass
+
         self._refresh_logs()
 
     def _refresh_logs(self) -> None:
@@ -346,35 +452,26 @@ class LiveLogsApp(App):
 
         self._shown_count = 0
         for log_entry in self._log_buffer:
-            if self._matches_filter(log_entry['level']):
+            if self._matches_filter(log_entry['level'], log_entry['container']):
                 self._display_log(log_entry)
                 self._shown_count += 1
 
         self._update_info()
 
-    def action_filter_all(self) -> None:
-        self._set_filter("ALL")
-
-    def action_filter_debug(self) -> None:
-        self._set_filter("DEBUG")
-
-    def action_filter_info(self) -> None:
-        self._set_filter("INFO")
-
-    def action_filter_warning(self) -> None:
-        self._set_filter("WARNING")
-
-    def action_filter_error(self) -> None:
-        self._set_filter("ERROR")
+    # Actions
+    def action_filter_all(self) -> None: self._set_level_filter("ALL")
+    def action_filter_debug(self) -> None: self._set_level_filter("DEBUG")
+    def action_filter_info(self) -> None: self._set_level_filter("INFO")
+    def action_filter_warning(self) -> None: self._set_level_filter("WARNING")
+    def action_filter_error(self) -> None: self._set_level_filter("ERROR")
 
     def action_show_help(self) -> None:
         """Show help overlay"""
-        # Remove existing help if any
         for overlay in self.query(".help-overlay"):
             overlay.remove()
             return
 
-        help_text = """[bold]Log Level Filters[/bold]
+        help_text = """[bold]Filters[/bold]
 
 [bold white]A[/bold white] All      - show all logs
 [bold red]E[/bold red] Error    - errors only
@@ -382,8 +479,11 @@ class LiveLogsApp(App):
 [bold cyan]I[/bold cyan] Info     - info + warnings + errors
 [bold dim]D[/bold dim] Debug    - all including debug
 
-[bold]Navigation[/bold]
+[bold]Containers[/bold]
+1-9      - Filter by container (if multiple)
+Shift+A  - Show all containers
 
+[bold]Navigation[/bold]
 Q / Esc  - quit live logs"""
 
         help_box = Container(
@@ -397,13 +497,19 @@ Q / Esc  - quit live logs"""
 
     def on_key(self, event) -> None:
         """Handle key events"""
-        # Close help on any key if help is shown
-        help_overlays = list(self.query(".help-overlay"))
-        if help_overlays and event.key in ("escape", "f1", "enter", "space"):
-            for overlay in help_overlays:
-                overlay.remove()
+        # Close help
+        if list(self.query(".help-overlay")):
+            if event.key in ("escape", "f1", "enter", "space"):
+                self.query(".help-overlay").remove()
             event.prevent_default()
             event.stop()
+            return
+
+        # Container shortcuts
+        if event.key in self.container_shortcuts:
+            self._set_container_filter(self.container_shortcuts[event.key])
+        elif event.key == "A": # Shift+A
+            self._set_container_filter(None)
 
     def action_quit(self) -> None:
         self._streaming = False
@@ -411,16 +517,14 @@ Q / Esc  - quit live logs"""
 
 
 def run_live_logs(
-    log_group: str,
-    log_stream: str,
+    log_sources: List[Dict],
     aws_client: AWSClient,
-    container_name: str = "",
+    title: str = "Live Logs",
 ) -> None:
     """Run the live logs TUI"""
     app = LiveLogsApp(
-        log_group=log_group,
-        log_stream=log_stream,
+        log_sources=log_sources,
         aws_client=aws_client,
-        container_name=container_name,
+        title=title,
     )
     app.run()

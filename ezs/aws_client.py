@@ -543,18 +543,104 @@ class AWSClient:
             console.print(f"[red]Error registering task definition: {e}[/red]")
             raise
 
-    def update_service(self, cluster: str, service: str, task_def_arn: str) -> bool:
-        """Update service to use new task definition"""
+    def update_service(self, cluster: str, service: str, task_def_arn: str = None) -> bool:
+        """Update service to use new task definition or force redeploy"""
         try:
-            self.ecs.update_service(
-                cluster=cluster,
-                service=service,
-                taskDefinition=task_def_arn,
-                forceNewDeployment=True
-            )
+            kwargs = {
+                'cluster': cluster,
+                'service': service,
+                'forceNewDeployment': True
+            }
+            if task_def_arn:
+                kwargs['taskDefinition'] = task_def_arn
+            self.ecs.update_service(**kwargs)
             return True
         except Exception as e:
-            console.print(f"[red]Error updating service: {e}[/red]")
+            raise
+
+    def update_ssm_parameter(self, param_name: str, value: str, param_type: str = None) -> str:
+        """Update SSM parameter value. Returns the parameter name."""
+        try:
+            kwargs = {
+                'Name': param_name,
+                'Value': value,
+                'Overwrite': True
+            }
+            if param_type:
+                kwargs['Type'] = param_type
+            self.ssm.put_parameter(**kwargs)
+            return param_name
+        except Exception as e:
+            raise
+
+    def update_secrets_manager(self, secret_arn: str, value: str, json_key: str = None) -> str:
+        """Update Secrets Manager secret value. Returns the secret ARN."""
+        try:
+            session = boto3.Session(region_name=self.region, profile_name=self.profile)
+            sm = session.client('secretsmanager')
+
+            if json_key:
+                # Need to update just one key in the JSON
+                response = sm.get_secret_value(SecretId=secret_arn)
+                import json
+                secret_dict = json.loads(response.get('SecretString', '{}'))
+                secret_dict[json_key] = value
+                sm.put_secret_value(SecretId=secret_arn, SecretString=json.dumps(secret_dict))
+            else:
+                sm.put_secret_value(SecretId=secret_arn, SecretString=value)
+
+            return secret_arn
+        except Exception as e:
+            raise
+
+    def get_container_secrets_mapping(self, task: Dict, container_name: str) -> Dict[str, dict]:
+        """Get mapping of env var name -> secret info (type, path/arn, json_key)"""
+        try:
+            task_def_arn = task.get('taskDefinitionArn')
+            if not task_def_arn:
+                return {}
+
+            response = self.ecs.describe_task_definition(taskDefinition=task_def_arn)
+            task_def = response.get('taskDefinition', {})
+
+            secrets_map = {}
+            for container_def in task_def.get('containerDefinitions', []):
+                if container_def.get('name') == container_name:
+                    for secret in container_def.get('secrets', []):
+                        name = secret.get('name', '')
+                        value_from = secret.get('valueFrom', '')
+                        if not value_from:
+                            continue
+
+                        if ':secretsmanager:' in value_from:
+                            # Secrets Manager
+                            parts = value_from.split(':')
+                            json_key = None
+                            base_arn = value_from
+                            if len(parts) > 7:
+                                base_arn = ':'.join(parts[:7])
+                                json_key = parts[7] if parts[7] else None
+                            secrets_map[name] = {
+                                'type': 'secretsmanager',
+                                'arn': base_arn,
+                                'json_key': json_key,
+                                'full_ref': value_from
+                            }
+                        else:
+                            # SSM Parameter Store
+                            param_path = value_from
+                            if value_from.startswith('arn:'):
+                                parts = value_from.split(':parameter')
+                                if len(parts) > 1:
+                                    param_path = parts[1]
+                            secrets_map[name] = {
+                                'type': 'ssm',
+                                'path': param_path,
+                                'full_ref': value_from
+                            }
+                    break
+            return secrets_map
+        except Exception as e:
             raise
 
     def get_log_events(self, log_group: str, log_stream: str,

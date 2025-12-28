@@ -101,59 +101,44 @@ def view_env_vars(result: dict, profile: str = None):
     service = result.get('service')
 
     container_name = container.get('name') if container else None
-    task_def_arn = task.get('taskDefinitionArn')
 
     if not container_name:
-        console.print("[red]No container selected[/red]")
         return
 
     aws = AWSClient(region=region, profile=profile)
-    env_vars = aws.get_container_env_vars(task, container_name)
 
-    if not env_vars:
-        console.print("[yellow]No environment variables found (or error fetching them).[/yellow]")
-        env_vars = {}
-
-    run_env_viewer(
+    run_env_viewer_with_loading(
         aws_client=aws,
-        cluster=cluster,
-        service=service,
-        task_def_arn=task_def_arn,
+        task=task,
         container_name=container_name,
-        env_vars=env_vars
+        cluster=cluster,
+        service=service
     )
 
 
 def view_task_env_vars(result: dict, profile: str = None):
     """View environment variables for all containers in task"""
-    # For now, just pick first container and show editor
+    from .env_viewer import run_env_viewer_with_loading
     task = result['task']
     region = result['region']
     cluster = result.get('cluster', {}).get('arn')
     service = result.get('service')
 
-    aws = AWSClient(region=region, profile=profile)
     containers = task.get('containers', [])
 
     if not containers:
-        console.print("[red]No containers found in task[/red]")
         return
 
     # Use first container
     container_name = containers[0].get('name')
-    task_def_arn = task.get('taskDefinitionArn')
-    env_vars = aws.get_container_env_vars(task, container_name)
+    aws = AWSClient(region=region, profile=profile)
 
-    if not env_vars:
-        env_vars = {}
-
-    run_env_viewer(
+    run_env_viewer_with_loading(
         aws_client=aws,
-        cluster=cluster,
-        service=service,
-        task_def_arn=task_def_arn,
+        task=task,
         container_name=container_name,
-        env_vars=env_vars
+        cluster=cluster,
+        service=service
     )
 
 

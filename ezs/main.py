@@ -93,26 +93,35 @@ def stream_task_logs(result: dict, profile: str = None):
 
 def view_env_vars(result: dict, profile: str = None):
     """View environment variables for a container"""
+    from .env_viewer import run_env_viewer_with_loading
     task = result['task']
     container = result['container']
     region = result['region']
 
-    aws = AWSClient(region=region, profile=profile)
     container_name = container.get('name') if container else None
-
     if not container_name:
         console.print("[red]No container selected[/red]")
         return
 
-    console.print(f"[cyan]Fetching env vars for {container_name}...[/cyan]")
+    run_env_viewer_with_loading(
+        task=task,
+        container_name=container_name,
+        region=region,
+        profile=profile,
+    )
 
-    env_vars = aws.get_container_env_vars(task, container_name)
 
-    if not env_vars:
-        console.print("[yellow]No environment variables found (or error fetching them).[/yellow]")
-        return
+def view_task_env_vars(result: dict, profile: str = None):
+    """View environment variables for all containers in task"""
+    from .env_viewer import run_task_env_viewer_with_loading
+    task = result['task']
+    region = result['region']
 
-    run_env_viewer(env_vars, container_name)
+    run_task_env_viewer_with_loading(
+        task=task,
+        region=region,
+        profile=profile,
+    )
 
 
 def download_logs(result: dict, profile: str = None):
@@ -235,6 +244,8 @@ def main():
             stream_task_logs(result, args.profile)
         elif result['type'] == 'env_vars':
             view_env_vars(result, args.profile)
+        elif result['type'] == 'task_env_vars':
+            view_task_env_vars(result, args.profile)
         elif result['type'] == 'logs_download':
             download_logs(result, args.profile)
 

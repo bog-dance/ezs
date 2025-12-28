@@ -340,7 +340,12 @@ class AWSClient:
             return []
 
     def get_container_env_vars(self, task: Dict, container_name: str) -> Dict[str, str]:
-        """Get environment variables for a specific container"""
+        """Get environment variables for a specific container.
+
+        Returns both regular environment variables and secrets.
+        For SSM parameters: fetches the actual value, marks SecureString with [SECURE]
+        For Secrets Manager: fetches the actual value, marks with [SECRET]
+        """
         try:
             task_def_arn = task.get('taskDefinitionArn')
             if not task_def_arn:
@@ -352,13 +357,151 @@ class AWSClient:
             for container_def in task_def.get('containerDefinitions', []):
                 if container_def.get('name') == container_name:
                     env_vars = {}
+
+                    # Get regular environment variables
                     for env in container_def.get('environment', []):
-                        env_vars[env['name']] = env['value']
+                        env_vars[env['name']] = env.get('value', '')
+
+                    # Get secrets (from Secrets Manager or SSM Parameter Store)
+                    ssm_params = []  # Collect SSM parameter paths
+                    sm_secrets = []  # Collect Secrets Manager refs
+
+                    for secret in container_def.get('secrets', []):
+                        name = secret.get('name', '')
+                        value_from = secret.get('valueFrom', '')
+                        if not value_from:
+                            continue
+
+                        if ':secretsmanager:' in value_from:
+                            sm_secrets.append((name, value_from))
+                        else:
+                            # SSM Parameter Store - extract path
+                            if value_from.startswith('arn:'):
+                                # Extract parameter name from ARN
+                                # arn:aws:ssm:region:account:parameter/path/to/param
+                                parts = value_from.split(':parameter')
+                                if len(parts) > 1:
+                                    param_path = parts[1]
+                                    ssm_params.append((name, param_path))
+                            else:
+                                # Direct parameter path
+                                ssm_params.append((name, value_from))
+
+                    # Fetch SSM parameters in batch
+                    if ssm_params:
+                        param_paths = [p[1] for p in ssm_params]
+                        param_values = self._fetch_ssm_parameters(param_paths)
+
+                        for name, path in ssm_params:
+                            if path in param_values:
+                                value, param_type = param_values[path]
+                                if param_type == 'SecureString':
+                                    env_vars[name] = f'[SECURE]{value}'
+                                else:
+                                    env_vars[name] = value
+                            else:
+                                env_vars[name] = '[ERROR] Could not fetch from SSM'
+
+                    # Fetch Secrets Manager secrets
+                    if sm_secrets:
+                        sm_values = self._fetch_secrets_manager(sm_secrets)
+                        for name, value in sm_values.items():
+                            env_vars[name] = value
+
                     return env_vars
 
             return {}
         except Exception as e:
             console.print(f"[red]Error getting env vars: {e}[/red]")
+            return {}
+
+    def _fetch_ssm_parameters(self, param_paths: List[str]) -> Dict[str, tuple]:
+        """Fetch SSM parameters and return dict of path -> (value, type)"""
+        result = {}
+        try:
+            # SSM GetParameters can fetch up to 10 at a time
+            for i in range(0, len(param_paths), 10):
+                batch = param_paths[i:i+10]
+                response = self.ssm.get_parameters(
+                    Names=batch,
+                    WithDecryption=True
+                )
+                for param in response.get('Parameters', []):
+                    name = param.get('Name', '')
+                    value = param.get('Value', '')
+                    param_type = param.get('Type', 'String')
+                    result[name] = (value, param_type)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not fetch SSM parameters: {e}[/yellow]")
+        return result
+
+    def _fetch_secrets_manager(self, secrets: List[tuple]) -> Dict[str, str]:
+        """Fetch secrets from Secrets Manager and return dict of env_name -> [SECRET]value"""
+        result = {}
+        try:
+            session = boto3.Session(region_name=self.region, profile_name=self.profile)
+            sm = session.client('secretsmanager')
+
+            for env_name, secret_arn in secrets:
+                try:
+                    # Handle ARN with optional JSON key suffix
+                    # Format: arn:aws:secretsmanager:region:account:secret:name-suffix:json_key:version
+                    secret_id = secret_arn
+                    json_key = None
+
+                    # Check if there's a JSON key specified (after the secret name)
+                    parts = secret_arn.split(':')
+                    if len(parts) >= 7:
+                        # Standard ARN has 7 parts, if more - could have json_key
+                        # arn:aws:secretsmanager:region:account:secret:name
+                        base_arn = ':'.join(parts[:7])
+                        if len(parts) > 7:
+                            json_key = parts[7] if parts[7] else None
+                        secret_id = base_arn
+
+                    response = sm.get_secret_value(SecretId=secret_id)
+                    secret_value = response.get('SecretString', '')
+
+                    # If JSON key specified, extract that key
+                    if json_key and secret_value:
+                        try:
+                            import json
+                            secret_dict = json.loads(secret_value)
+                            secret_value = secret_dict.get(json_key, secret_value)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    result[env_name] = f'[SECRET]{secret_value}'
+                except Exception as e:
+                    result[env_name] = f'[ERROR] Could not fetch: {str(e)[:30]}'
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not fetch Secrets Manager secrets: {e}[/yellow]")
+        return result
+
+    def get_all_container_env_vars(self, task: Dict) -> Dict[str, Dict[str, str]]:
+        """Get environment variables for all containers in task.
+
+        Returns a dict mapping container_name -> {env_var_name: value}
+        Uses get_container_env_vars for each container to fetch SSM values.
+        """
+        try:
+            task_def_arn = task.get('taskDefinitionArn')
+            if not task_def_arn:
+                return {}
+
+            response = self.ecs.describe_task_definition(taskDefinition=task_def_arn)
+            task_def = response.get('taskDefinition', {})
+
+            result = {}
+            for container_def in task_def.get('containerDefinitions', []):
+                container_name = container_def.get('name', '')
+                env_vars = self.get_container_env_vars(task, container_name)
+                if env_vars:
+                    result[container_name] = env_vars
+
+            return result
+        except Exception as e:
+            console.print(f"[red]Error getting all env vars: {e}[/red]")
             return {}
 
     def get_log_events(self, log_group: str, log_stream: str,

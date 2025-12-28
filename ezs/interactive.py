@@ -147,16 +147,20 @@ class ECSConnectApp(App):
         border: solid #5c4a6e;
     }
 
-    #action-row {
+    .action-row {
         width: 100%;
         height: auto;
         layout: horizontal;
     }
 
-    #action-row RegionBox {
+    .action-row RegionBox {
         width: 1fr;
-        height: auto;
+        height: 12;
         margin: 0 1;
+    }
+
+    .action-row RegionBox OptionList {
+        height: 100%;
     }
 
     #help-overlay {
@@ -242,7 +246,9 @@ class ECSConnectApp(App):
         self._instance_id = None
 
         # Cached data
-        self.cached_services = {}
+        self.cached_services = {}  # cluster_arn -> services
+        self.cached_tasks = {}     # (cluster_arn, service) -> tasks
+        self.cached_containers = {}  # task_arn -> (instance_id, containers)
         self.services = []
         self.tasks = []
         self.containers = []
@@ -251,6 +257,9 @@ class ECSConnectApp(App):
         self.regions_order = []
         self.clusters_by_region = {}
         self.nav_list = []  # Flat list for cluster navigation
+
+        # Temporary status timer
+        self._temp_status_timer = None
         self.nav_index = 0
 
         # Navigation for other views
@@ -539,13 +548,28 @@ class ECSConnectApp(App):
     def _go_to_task(self) -> None:
         """Go to task selection"""
         self.step = "task"
-        self._show_loading("Fetching tasks...")
-        self.run_worker(
-            self._fetch_tasks,
-            name="fetch_tasks",
-            exclusive=True,
-            thread=True
-        )
+        cache_key = (self.selected_cluster['arn'], self.selected_service)
+
+        # Use cache if available
+        if cache_key in self.cached_tasks:
+            self.tasks = self.cached_tasks[cache_key]
+            if not self.tasks:
+                self._set_status("No running tasks found")
+                self._go_to_service()
+                return
+            if len(self.tasks) == 1:
+                self.selected_task = self.tasks[0]
+                self._show_single_task_message()
+                return
+            self._render_task_view()
+        else:
+            self._show_loading("Fetching tasks...")
+            self.run_worker(
+                self._fetch_tasks,
+                name="fetch_tasks",
+                exclusive=True,
+                thread=True
+            )
 
     def _fetch_tasks(self) -> list:
         """Worker: fetch tasks and enrich with instance info"""
@@ -584,34 +608,159 @@ class ECSConnectApp(App):
     def _go_to_task_menu(self) -> None:
         """Go to task menu (actions for task)"""
         self.step = "task_menu"
+        task_arn = self.selected_task.get('taskArn')
+
+        # Check if we have cached container info
+        if task_arn in self.cached_containers:
+            instance_id, containers = self.cached_containers[task_arn]
+            self._instance_id = instance_id
+            self.containers = containers
+            self._show_task_menu_or_skip()
+        else:
+            # Need to fetch container info first
+            self._show_loading("Getting container info...")
+            self.run_worker(
+                self._fetch_container_info,
+                name="fetch_container_info_for_menu",
+                exclusive=True,
+                thread=True
+            )
+
+    def _show_task_menu_or_skip(self) -> None:
+        """Show task menu or skip to container menu if only one container"""
         self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
 
         search = self.query_one("#search", Input)
         search.value = ""
         search.placeholder = ""
 
-        options = [
-            ("connect", "Connect to Container"),
-            ("logs", "View Task Logs (All Containers)"),
+        # If only one container, show message and skip to container menu
+        if len(self.containers) == 1:
+            self.selected_container = self.containers[0]
+            container_name = self.selected_container.get('name', 'unknown')
+            self._show_single_container_message(container_name)
+            return
+
+        self._render_task_menu_view()
+        search.focus()
+
+    def _show_single_container_message(self, container_name: str) -> None:
+        """Show status message and proceed immediately to container menu"""
+        self._set_temporary_status(f"Single container '{container_name}' → skipping to container menu", 4.0)
+        self._go_to_confirm(self._instance_id)
+
+    def _show_single_task_message(self) -> None:
+        """Show status message and proceed immediately to task menu"""
+        task_id = extract_name_from_arn(self.selected_task['taskArn'])
+        self._set_temporary_status(f"Single task '{task_id}' → skipping to task menu", 4.0)
+        self._go_to_task_menu()
+
+    def _set_temporary_status(self, message: str, duration: float) -> None:
+        """Show a temporary status message, then restore default status after duration"""
+        self._set_status(message)
+        # Cancel any existing temporary status timer
+        if hasattr(self, '_temp_status_timer') and self._temp_status_timer:
+            self._temp_status_timer.stop()
+        self._temp_status_timer = self.set_timer(duration, self._restore_default_status)
+
+    def _restore_default_status(self) -> None:
+        """Restore the default status based on current step"""
+        self._temp_status_timer = None
+        if self.step == "confirm":
+            container_name = self.selected_container.get('name', 'unknown')
+            self._set_status(f"Container: {container_name}")
+        elif self.step == "task_menu":
+            self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
+
+    def _render_task_menu_view(self) -> None:
+        """Render task menu with two columns: Containers and Logs"""
+        self._set_title("Select Task Action")
+        self._clear_scroll_area()
+
+        scroll = self.query_one("#scroll-area", VerticalScroll)
+
+        # Build container list from task
+        container_items = []
+        for c in self.containers:
+            name = c.get('name', 'unknown')
+            status = c.get('lastStatus', 'unknown')
+            container_items.append((f"container:{name}", f"{name} ({status})"))
+
+        self._task_menu_containers = container_items
+        self._task_menu_logs = [
+            ("task_logs", "live logs (all containers)"),
         ]
 
-        self._render_list_view(
-            "Select Task Action",
-            options,
-            lambda x: x[1]
-        )
-        search.focus()
+        # Horizontal container for two sections
+        row = Horizontal(classes="action-row")
+        scroll.mount(row)
+
+        # Containers section (left)
+        containers_box = RegionBox("Containers", "containers")
+        containers_box.border_title = " Containers "
+        row.mount(containers_box)
+
+        containers_options = OptionList(id="list-containers")
+        containers_box.mount(containers_options)
+        for key, label in self._task_menu_containers:
+            containers_options.add_option(Option(label))
+
+        # Logs section (right)
+        logs_box = RegionBox("Logs", "logs")
+        logs_box.border_title = " Logs "
+        row.mount(logs_box)
+
+        logs_options = OptionList(id="list-logs")
+        logs_box.mount(logs_options)
+        for key, label in self._task_menu_logs:
+            logs_options.add_option(Option(label))
+
+        # Track current section and index
+        self._menu_section = "containers"
+        self._menu_sections = ["containers", "logs"]
+        self._menu_idx = 0
+
+        # Update counter
+        counter = self.query_one("#counter", Static)
+        counter.update(f" {len(container_items)} containers, 1 log action")
+
+        self.call_after_refresh(self._update_menu_highlight)
 
     def _go_to_container(self) -> None:
         """Go to container selection"""
         self.step = "container"
-        self._show_loading("Getting container instance...")
-        self.run_worker(
-            self._fetch_container_info,
-            name="fetch_container_info",
-            exclusive=True,
-            thread=True
-        )
+        task_arn = self.selected_task.get('taskArn')
+
+        # Use cache if available
+        if task_arn in self.cached_containers:
+            instance_id, containers = self.cached_containers[task_arn]
+            self._instance_id = instance_id
+            self.containers = containers
+
+            if not self.containers:
+                self._set_status("")
+                self.result = {
+                    'type': 'ssh',
+                    'instance_id': self._instance_id,
+                    'region': self.selected_cluster['region']
+                }
+                self.exit()
+                return
+
+            if len(self.containers) == 1:
+                self.selected_container = self.containers[0]
+                self._go_to_confirm(self._instance_id)
+                return
+
+            self._render_container_view()
+        else:
+            self._show_loading("Getting container instance...")
+            self.run_worker(
+                self._fetch_container_info,
+                name="fetch_container_info",
+                exclusive=True,
+                thread=True
+            )
 
     def _fetch_container_info(self) -> dict:
         """Worker: get instance ID, verify SSM, get containers"""
@@ -664,7 +813,7 @@ class ECSConnectApp(App):
         search.focus()
 
     def _render_confirm_view(self, filter_text: str = "") -> None:
-        """Render confirm view with SSH and Logs sections side by side"""
+        """Render confirm view with SSH, Logs, and Configuration sections"""
         title = "Select Action"
         if self.selected_container:
             title += f" - {self.selected_container.get('name', '')}"
@@ -677,19 +826,22 @@ class ECSConnectApp(App):
         self._all_ssh_items = [
             ("container", "container"),
             ("ssh", "host"),
-            ("env_vars", "env variables"),
         ]
         self._all_logs_items = [
             ("logs_live", "live logs"),
             ("logs_download", "download logs"),
         ]
+        self._all_config_items = [
+            ("env_vars", "environment variables"),
+        ]
 
         # Initially show all
         self.ssh_items = self._all_ssh_items[:]
         self.logs_items = self._all_logs_items[:]
+        self.config_items = self._all_config_items[:]
 
-        # Horizontal container for both sections
-        row = Horizontal(id="action-row")
+        # Horizontal container for three sections
+        row = Horizontal(classes="action-row")
         scroll.mount(row)
 
         # SSH section (left)
@@ -703,7 +855,7 @@ class ECSConnectApp(App):
         for key, label in self.ssh_items:
             ssh_options.add_option(Option(label))
 
-        # Logs section (right)
+        # Logs section (middle)
         logs_box = RegionBox("Logs", "logs")
         logs_box.border_title = " Logs "
         row.mount(logs_box)
@@ -714,9 +866,27 @@ class ECSConnectApp(App):
         for key, label in self.logs_items:
             logs_options.add_option(Option(label))
 
-        # Track current section and index
-        self._confirm_section = "ssh"
-        self._confirm_idx = 0
+        # Configuration section (right)
+        config_box = RegionBox("Configuration", "config")
+        config_box.border_title = " Configuration "
+        row.mount(config_box)
+
+        config_options = OptionList(id="list-config")
+        config_box.mount(config_options)
+
+        for key, label in self.config_items:
+            config_options.add_option(Option(label))
+
+        # Track current section and index (using same pattern as task_menu)
+        self._menu_section = "ssh"
+        self._menu_sections = ["ssh", "logs", "config"]
+        self._menu_idx = 0
+
+        # Update counter
+        counter = self.query_one("#counter", Static)
+        counter.update(f" {len(self.ssh_items) + len(self.logs_items) + len(self.config_items)} actions")
+
+        self.call_after_refresh(self._update_menu_highlight)
 
     def _filter_confirm_view(self, filter_text: str) -> None:
         """Filter items in confirm view without re-rendering"""
@@ -729,6 +899,10 @@ class ECSConnectApp(App):
         ]
         self.logs_items = [
             item for item in self._all_logs_items
+            if not filter_text or filter_lower in item[1].lower()
+        ]
+        self.config_items = [
+            item for item in self._all_config_items
             if not filter_text or filter_lower in item[1].lower()
         ]
 
@@ -750,27 +924,47 @@ class ECSConnectApp(App):
         except Exception:
             pass
 
+        # Update Config OptionList
+        try:
+            config_options = self.query_one("#list-config", OptionList)
+            config_options.clear_options()
+            for key, label in self.config_items:
+                config_options.add_option(Option(label))
+        except Exception:
+            pass
+
         # Update counter
         counter = self.query_one("#counter", Static)
-        counter.update(f" {len(self.ssh_items) + len(self.logs_items)} actions")
+        counter.update(f" {len(self.ssh_items) + len(self.logs_items) + len(self.config_items)} actions")
 
         # Reset selection to first available item
         if self.ssh_items:
-            self._confirm_section = "ssh"
-            self._confirm_idx = 0
+            self._menu_section = "ssh"
+            self._menu_idx = 0
         elif self.logs_items:
-            self._confirm_section = "logs"
-            self._confirm_idx = 0
+            self._menu_section = "logs"
+            self._menu_idx = 0
+        elif self.config_items:
+            self._menu_section = "config"
+            self._menu_idx = 0
         else:
-            self._confirm_section = "ssh"
-            self._confirm_idx = 0
+            self._menu_section = "ssh"
+            self._menu_idx = 0
 
-        self.call_after_refresh(self._update_confirm_highlight)
+        self.call_after_refresh(self._update_menu_highlight)
 
-    def _update_confirm_highlight(self) -> None:
-        """Update visual highlight for confirm view"""
+    def _update_menu_highlight(self) -> None:
+        """Update visual highlight for multi-section menus (task_menu and confirm)"""
+        # Get sections to update based on current step
+        if self.step == "task_menu":
+            sections = ["containers", "logs"]
+        elif self.step == "confirm":
+            sections = ["ssh", "logs", "config"]
+        else:
+            return
+
         # Clear all highlights
-        for section in ("ssh", "logs"):
+        for section in sections:
             try:
                 option_list = self.query_one(f"#list-{section}", OptionList)
                 option_list.highlighted = None
@@ -779,12 +973,33 @@ class ECSConnectApp(App):
 
         # Set highlight on current section/item
         try:
-            option_list = self.query_one(f"#list-{self._confirm_section}", OptionList)
-            option_list.highlighted = self._confirm_idx
+            option_list = self.query_one(f"#list-{self._menu_section}", OptionList)
+            option_list.highlighted = self._menu_idx
         except Exception:
             pass
 
     # ==================== SELECTION HANDLING ====================
+
+    def _handle_task_menu_select(self, item: tuple) -> None:
+        """Handle selection in task menu view"""
+        choice = item[0]
+
+        if choice.startswith("container:"):
+            # Selected a specific container
+            container_name = choice.split(":", 1)[1]
+            for c in self.containers:
+                if c.get('name') == container_name:
+                    self.selected_container = c
+                    break
+            self._go_to_confirm(self._instance_id)
+        elif choice == "task_logs":
+            self.result = {
+                'type': 'task_logs_live',
+                'cluster': self.selected_cluster,
+                'task': self.selected_task,
+                'region': self.selected_cluster['region']
+            }
+            self.exit()
 
     def _handle_confirm_select(self, item: tuple) -> None:
         """Handle selection in confirm view"""
@@ -879,18 +1094,8 @@ class ECSConnectApp(App):
             self._go_to_task_menu()
 
         elif self.step == "task_menu":
-            # item is (action_key, label)
-            action = item[0]
-            if action == "connect":
-                self._go_to_container()
-            elif action == "logs":
-                self.result = {
-                    'type': 'task_logs_live',
-                    'cluster': self.selected_cluster,
-                    'task': self.selected_task,
-                    'region': self.selected_cluster['region']
-                }
-                self.exit()
+            # Handled by _handle_task_menu_select
+            self._handle_task_menu_select(item)
 
         elif self.step == "container":
             self.selected_container = item
@@ -928,7 +1133,22 @@ class ECSConnectApp(App):
         elif self.step == "container":
             self._go_to_task_menu()
         elif self.step == "confirm":
-            self._go_to_service()  # Go back to start of flow (can be refined to go to container list)
+            # Go back to task_menu (which shows containers) or skip if single container
+            if self.containers and len(self.containers) > 1:
+                self.step = "task_menu"
+                self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
+                search = self.query_one("#search", Input)
+                search.value = ""
+                search.placeholder = ""
+                self._render_task_menu_view()
+                search.focus()
+            else:
+                # Single container - skip task menu
+                # Also skip task list if only one task
+                if self.tasks and len(self.tasks) == 1:
+                    self._go_to_service()
+                else:
+                    self._go_to_task()
         elif self.step == "time_select":
             self._go_to_confirm(self._instance_id)
 
@@ -953,17 +1173,8 @@ class ECSConnectApp(App):
                 filter_text=event.value
             )
         elif self.step == "task_menu":
-             # No filtering needed for 2 options, but good practice
-            options = [
-                ("connect", "Connect to Container"),
-                ("logs", "View Task Logs (All Containers)"),
-            ]
-            self._render_list_view(
-                "Select Task Action",
-                options,
-                lambda x: x[1],
-                filter_text=event.value
-            )
+            # Re-render task menu (no filtering needed but keeps consistency)
+            self._render_task_menu_view()
         elif self.step == "container":
             self._render_list_view(
                 "Select Container",
@@ -1007,14 +1218,32 @@ class ECSConnectApp(App):
                             self.nav_index = i
                             self._handle_cluster_select()
                             return
+        elif self.step == "task_menu":
+            # Find clicked action in task menu
+            option_list = event.option_list
+            section_items = {
+                "containers": self._task_menu_containers,
+                "logs": self._task_menu_logs,
+            }
+            for section, items in section_items.items():
+                if option_list.id == f"list-{section}":
+                    self._menu_section = section
+                    self._menu_idx = event.option_index
+                    if 0 <= event.option_index < len(items):
+                        self._handle_task_menu_select(items[event.option_index])
+                    return
         elif self.step == "confirm":
             # Find clicked action in confirm view
             option_list = event.option_list
-            for section in ("ssh", "logs"):
+            section_items = {
+                "ssh": self.ssh_items,
+                "logs": self.logs_items,
+                "config": self.config_items,
+            }
+            for section, items in section_items.items():
                 if option_list.id == f"list-{section}":
-                    self._confirm_section = section
-                    self._confirm_idx = event.option_index
-                    items = self.ssh_items if section == "ssh" else self.logs_items
+                    self._menu_section = section
+                    self._menu_idx = event.option_index
                     if 0 <= event.option_index < len(items):
                         self._handle_confirm_select(items[event.option_index])
                     return
@@ -1024,15 +1253,34 @@ class ECSConnectApp(App):
                 item = self.index_to_item[event.option_index]
                 self._handle_list_select(item)
 
+    def _get_current_menu_items(self) -> list:
+        """Get items list for current menu section"""
+        if self.step == "task_menu":
+            if self._menu_section == "containers":
+                return self._task_menu_containers
+            elif self._menu_section == "logs":
+                return self._task_menu_logs
+        elif self.step == "confirm":
+            if self._menu_section == "ssh":
+                return self.ssh_items
+            elif self._menu_section == "logs":
+                return self.logs_items
+            elif self._menu_section == "config":
+                return self.config_items
+        return []
+
     def action_select_current(self) -> None:
         """Select currently highlighted item"""
         if self.step == "cluster":
             self._handle_cluster_select()
+        elif self.step == "task_menu":
+            items = self._get_current_menu_items()
+            if 0 <= self._menu_idx < len(items):
+                self._handle_task_menu_select(items[self._menu_idx])
         elif self.step == "confirm":
-            # Get current item from section
-            items = self.ssh_items if self._confirm_section == "ssh" else self.logs_items
-            if 0 <= self._confirm_idx < len(items):
-                self._handle_confirm_select(items[self._confirm_idx])
+            items = self._get_current_menu_items()
+            if 0 <= self._menu_idx < len(items):
+                self._handle_confirm_select(items[self._menu_idx])
         else:
             try:
                 option_list = self.query_one(f"#{self._current_options_id}", OptionList)
@@ -1056,14 +1304,14 @@ class ECSConnectApp(App):
                 else:
                     self.nav_index = len(self.nav_list) - 1
                 self._update_cluster_highlight()
-        elif self.step == "confirm":
+        elif self.step in ("task_menu", "confirm"):
             # Stay within current section
-            items = self.ssh_items if self._confirm_section == "ssh" else self.logs_items
-            if self._confirm_idx > 0:
-                self._confirm_idx -= 1
+            items = self._get_current_menu_items()
+            if self._menu_idx > 0:
+                self._menu_idx -= 1
             else:
-                self._confirm_idx = len(items) - 1
-            self._update_confirm_highlight()
+                self._menu_idx = len(items) - 1 if items else 0
+            self._update_menu_highlight()
         else:
             try:
                 option_list = self.query_one(f"#{self._current_options_id}", OptionList)
@@ -1080,14 +1328,14 @@ class ECSConnectApp(App):
                 else:
                     self.nav_index = 0
                 self._update_cluster_highlight()
-        elif self.step == "confirm":
+        elif self.step in ("task_menu", "confirm"):
             # Stay within current section
-            items = self.ssh_items if self._confirm_section == "ssh" else self.logs_items
-            if self._confirm_idx < len(items) - 1:
-                self._confirm_idx += 1
+            items = self._get_current_menu_items()
+            if self._menu_idx < len(items) - 1:
+                self._menu_idx += 1
             else:
-                self._confirm_idx = 0
-            self._update_confirm_highlight()
+                self._menu_idx = 0
+            self._update_menu_highlight()
         else:
             try:
                 option_list = self.query_one(f"#{self._current_options_id}", OptionList)
@@ -1121,6 +1369,10 @@ class ECSConnectApp(App):
 
         elif worker_name == "fetch_tasks":
             self.tasks = result
+            # Cache the result
+            cache_key = (self.selected_cluster['arn'], self.selected_service)
+            self.cached_tasks[cache_key] = result
+
             if not self.tasks:
                 self._set_status("No running tasks found")
                 self._go_to_service()
@@ -1128,9 +1380,28 @@ class ECSConnectApp(App):
             # Auto-select if only one task
             if len(self.tasks) == 1:
                 self.selected_task = self.tasks[0]
-                self._go_to_task_menu()
+                self._show_single_task_message()
                 return
             self._render_task_view()
+
+        elif worker_name == "fetch_container_info_for_menu":
+            if result.get('error') == 'no_instance':
+                self._set_status("Could not determine EC2 instance")
+                self._go_to_task()
+                return
+            if result.get('error') == 'no_ssm':
+                self._set_status(f"Instance {result['instance_id']} not accessible via SSM")
+                self._go_to_task()
+                return
+
+            self._instance_id = result['instance_id']
+            self.containers = result['containers']
+
+            # Cache the result
+            task_arn = self.selected_task.get('taskArn')
+            self.cached_containers[task_arn] = (self._instance_id, self.containers)
+
+            self._show_task_menu_or_skip()
 
         elif worker_name == "fetch_container_info":
             if result.get('error') == 'no_instance':
@@ -1144,6 +1415,10 @@ class ECSConnectApp(App):
 
             self._instance_id = result['instance_id']
             self.containers = result['containers']
+
+            # Cache the result
+            task_arn = self.selected_task.get('taskArn')
+            self.cached_containers[task_arn] = (self._instance_id, self.containers)
 
             if not self.containers:
                 # No containers, go straight to SSH
@@ -1203,18 +1478,31 @@ class ECSConnectApp(App):
             event.stop()
             return
 
-        # Tab switches between sections in confirm view
+        # Tab switches between sections in multi-column menus, or navigates items in single-column
         if event.key in ("tab", "shift+tab"):
             event.prevent_default()
             event.stop()
-            if self.step == "confirm":
-                # Toggle between ssh and logs sections
-                if self._confirm_section == "ssh":
-                    self._confirm_section = "logs"
+            if self.step in ("task_menu", "confirm"):
+                # Multi-column: switch between sections
+                sections = self._menu_sections
+                current_idx = sections.index(self._menu_section) if self._menu_section in sections else 0
+
+                if event.key == "tab":
+                    # Move forward
+                    current_idx = (current_idx + 1) % len(sections)
                 else:
-                    self._confirm_section = "ssh"
-                self._confirm_idx = 0
-                self._update_confirm_highlight()
+                    # Move backward (shift+tab)
+                    current_idx = (current_idx - 1) % len(sections)
+
+                self._menu_section = sections[current_idx]
+                self._menu_idx = 0
+                self._update_menu_highlight()
+            elif self.step in ("cluster", "service", "task", "container", "time_select"):
+                # Single-column: Tab navigates items like up/down arrows
+                if event.key == "tab":
+                    self.action_nav_down()
+                else:
+                    self.action_nav_up()
             return
         # Intercept left/right for navigation (not text cursor)
         elif event.key == "left":

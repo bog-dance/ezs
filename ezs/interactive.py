@@ -1504,17 +1504,22 @@ class ECSConnectApp(App):
                 else:
                     self.action_nav_up()
             return
-        # Intercept left/right for navigation (not text cursor)
-        elif event.key == "left":
+        # Left/right only for switching between blocks in multi-column menus
+        elif event.key in ("left", "right"):
             event.prevent_default()
             event.stop()
-            # Don't exit from cluster view with left arrow
-            if self.step != "cluster":
-                self._handle_back()
-        elif event.key == "right":
-            event.prevent_default()
-            event.stop()
-            self.action_select_current()
+            if self.step in ("task_menu", "confirm"):
+                # Switch between sections
+                sections = self._menu_sections
+                current_idx = sections.index(self._menu_section) if self._menu_section in sections else 0
+                if event.key == "right":
+                    current_idx = (current_idx + 1) % len(sections)
+                else:
+                    current_idx = (current_idx - 1) % len(sections)
+                self._menu_section = sections[current_idx]
+                self._menu_idx = 0
+                self._update_menu_highlight()
+            # For single-column menus, left/right do nothing
 
 
 class RegionBox(Container):

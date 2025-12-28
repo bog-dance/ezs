@@ -9,19 +9,13 @@ from textual.binding import Binding
 
 
 class FilterInput(Input):
-    """Input that blocks space and enter keys (handled by parent app)"""
+    """Input that blocks space key (handled by parent app for reveal action)"""
 
     async def _on_key(self, event) -> None:
-        """Block space and enter from being typed - post message to app instead"""
+        """Block space from being typed - post message to app instead"""
         if event.key == "space":
             # Block input, trigger app action
             self.app.action_reveal_selected()
-            event.prevent_default()
-            event.stop()
-            return
-        if event.key == "enter":
-            # Block input, trigger app action
-            self.app.action_copy_filtered()
             event.prevent_default()
             event.stop()
             return
@@ -171,19 +165,20 @@ class EnvViewerApp(App):
     }
 
     .confirm-btn {
-        width: 10;
+        width: 12;
+        min-width: 12;
         height: 3;
         margin: 0 1;
         background: #3d3556;
         color: #a99fc4;
-        border: solid #5c4a6e;
+        text-align: center;
+        content-align: center middle;
     }
 
     .confirm-btn:focus {
         background: #5c4a6e;
         color: #ffffff;
         text-style: bold;
-        border: solid #8a7fa0;
     }
 
     .loading-box {
@@ -210,7 +205,7 @@ class EnvViewerApp(App):
     """
 
     BINDINGS = [
-        Binding("enter", "copy_filtered", "Copy", show=True, priority=True),
+        Binding("ctrl+s", "copy_filtered", "Copy", show=True, priority=True, key_display="^S"),
         Binding("space", "reveal_selected", "Reveal", show=True, priority=True, key_display="␣"),
         Binding("escape", "close_or_quit", "Back", show=True, priority=True),
         Binding("q", "close_or_quit", "Back", show=False),
@@ -379,10 +374,21 @@ class EnvViewerApp(App):
         self.mount(overlay)
 
     def _close_overlay(self) -> None:
-        """Close the overlay"""
+        """Close the overlay and restore focus to search input"""
         self._overlay_visible = False
+        self._confirm_mode = False
         for overlay in self.query(".overlay"):
             overlay.remove()
+        # Delay focus restoration to ensure overlay is fully removed
+        self.set_timer(0.05, self._focus_search)
+
+    def _focus_search(self) -> None:
+        """Focus the search input"""
+        try:
+            search = self.query_one("#search", FilterInput)
+            search.focus()
+        except Exception:
+            pass
 
     def action_reveal_selected(self) -> None:
         """Reveal the selected secret temporarily"""
@@ -471,6 +477,9 @@ class EnvViewerApp(App):
                     pass
                 event.prevent_default()
                 event.stop()
+                return
+            elif event.key == "enter":
+                # Let Enter through for button press
                 return
             # Block other keys during confirmation
             event.prevent_default()
@@ -617,19 +626,20 @@ class MultiEnvViewerApp(App):
     }
 
     .confirm-btn {
-        width: 10;
+        width: 12;
+        min-width: 12;
         height: 3;
         margin: 0 1;
         background: #3d3556;
         color: #a99fc4;
-        border: solid #5c4a6e;
+        text-align: center;
+        content-align: center middle;
     }
 
     .confirm-btn:focus {
         background: #5c4a6e;
         color: #ffffff;
         text-style: bold;
-        border: solid #8a7fa0;
     }
 
     .loading-box {
@@ -656,7 +666,7 @@ class MultiEnvViewerApp(App):
     """
 
     BINDINGS = [
-        Binding("enter", "copy_filtered", "Copy", show=True, priority=True),
+        Binding("ctrl+s", "copy_filtered", "Copy", show=True, priority=True, key_display="^S"),
         Binding("space", "reveal_selected", "Reveal", show=True, priority=True, key_display="␣"),
         Binding("escape", "close_or_quit", "Back", show=True, priority=True),
         Binding("q", "close_or_quit", "Back", show=False),
@@ -896,9 +906,21 @@ class MultiEnvViewerApp(App):
         self.mount(overlay)
 
     def _close_overlay(self) -> None:
+        """Close the overlay and restore focus to search input"""
         self._overlay_visible = False
+        self._confirm_mode = False
         for overlay in self.query(".overlay"):
             overlay.remove()
+        # Delay focus restoration to ensure overlay is fully removed
+        self.set_timer(0.05, self._focus_search)
+
+    def _focus_search(self) -> None:
+        """Focus the search input"""
+        try:
+            search = self.query_one("#search", FilterInput)
+            search.focus()
+        except Exception:
+            pass
 
     def action_reveal_selected(self) -> None:
         if self._overlay_visible:
@@ -995,6 +1017,9 @@ class MultiEnvViewerApp(App):
                     pass
                 event.prevent_default()
                 event.stop()
+                return
+            elif event.key == "enter":
+                # Let Enter through for button press
                 return
             # Block other keys during confirmation
             event.prevent_default()

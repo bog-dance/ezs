@@ -1018,6 +1018,8 @@ class ECSConnectApp(App):
         elif choice == "env_vars":
             self.result = {
                 'type': 'env_vars',
+                'cluster': self.selected_cluster,
+                'service': self.selected_service,
                 'task': self.selected_task,
                 'container': self.selected_container,
                 'region': self.selected_cluster['region']

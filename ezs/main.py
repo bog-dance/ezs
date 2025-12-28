@@ -20,6 +20,7 @@ from .interactive import run_ecs_connect
 from .setup_wizard import run_setup_wizard
 from .live_logs import run_live_logs
 from .download_logs import run_download_logs
+from .env_viewer import run_env_viewer
 from .ssm_session import (
     check_session_manager_plugin,
     start_ssh_session,
@@ -52,13 +53,66 @@ def stream_live_logs(result: dict, profile: str = None):
         console.print("[yellow]Make sure the container uses awslogs driver.[/yellow]")
         return
 
-    # Run the Live Logs TUI
+    # Run the Live Logs TUI (single source)
+    source = {
+        'container': container_name,
+        'log_group': log_group,
+        'log_stream': log_stream
+    }
     run_live_logs(
-        log_group=log_group,
-        log_stream=log_stream,
+        log_sources=[source],
         aws_client=aws,
-        container_name=container_name,
+        title=f"Live Logs: {container_name}",
     )
+
+
+def stream_task_logs(result: dict, profile: str = None):
+    """Stream live logs for ALL containers in a task"""
+    task = result['task']
+    region = result['region']
+
+    aws = AWSClient(region=region, profile=profile)
+    task_id = task.get('taskArn', '').split('/')[-1]
+
+    console.print(f"[cyan]Getting log configuration for task {task_id}...[/cyan]")
+
+    log_sources = aws.get_all_container_log_configs(task)
+
+    if not log_sources:
+        console.print("[red]Could not find any CloudWatch logs configuration for this task.[/red]")
+        return
+
+    console.print(f"[green]Found {len(log_sources)} log streams.[/green]")
+
+    run_live_logs(
+        log_sources=log_sources,
+        aws_client=aws,
+        title=f"Task Logs: {task_id}",
+    )
+
+
+def view_env_vars(result: dict, profile: str = None):
+    """View environment variables for a container"""
+    task = result['task']
+    container = result['container']
+    region = result['region']
+
+    aws = AWSClient(region=region, profile=profile)
+    container_name = container.get('name') if container else None
+
+    if not container_name:
+        console.print("[red]No container selected[/red]")
+        return
+
+    console.print(f"[cyan]Fetching env vars for {container_name}...[/cyan]")
+
+    env_vars = aws.get_container_env_vars(task, container_name)
+
+    if not env_vars:
+        console.print("[yellow]No environment variables found (or error fetching them).[/yellow]")
+        return
+
+    run_env_viewer(env_vars, container_name)
 
 
 def download_logs(result: dict, profile: str = None):
@@ -177,6 +231,10 @@ def main():
                 start_ssh_session(result['instance_id'], result['region'])
         elif result['type'] == 'logs_live':
             stream_live_logs(result, args.profile)
+        elif result['type'] == 'task_logs_live':
+            stream_task_logs(result, args.profile)
+        elif result['type'] == 'env_vars':
+            view_env_vars(result, args.profile)
         elif result['type'] == 'logs_download':
             download_logs(result, args.profile)
 

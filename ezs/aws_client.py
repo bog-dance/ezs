@@ -299,6 +299,68 @@ class AWSClient:
             console.print(f"[red]Error getting log stream: {e}[/red]")
             return None
 
+    def get_all_container_log_configs(self, task: Dict) -> List[Dict]:
+        """Get log config (group, stream) for all containers in task"""
+        results = []
+        try:
+            task_def_arn = task.get('taskDefinitionArn')
+            task_id = task.get('taskArn', '').split('/')[-1]
+
+            if not task_def_arn or not task_id:
+                return []
+
+            response = self.ecs.describe_task_definition(taskDefinition=task_def_arn)
+            task_def = response.get('taskDefinition', {})
+
+            for container_def in task_def.get('containerDefinitions', []):
+                name = container_def.get('name')
+                log_config = container_def.get('logConfiguration', {})
+
+                if log_config.get('logDriver') == 'awslogs':
+                    options = log_config.get('options', {})
+                    group = options.get('awslogs-group')
+                    prefix = options.get('awslogs-stream-prefix', '')
+
+                    stream = None
+                    if prefix:
+                        stream = f"{prefix}/{name}/{task_id}"
+                    else:
+                        stream = f"{name}/{task_id}"
+
+                    if group and stream:
+                        results.append({
+                            'container': name,
+                            'log_group': group,
+                            'log_stream': stream
+                        })
+
+            return results
+        except Exception as e:
+            console.print(f"[red]Error getting task logs: {e}[/red]")
+            return []
+
+    def get_container_env_vars(self, task: Dict, container_name: str) -> Dict[str, str]:
+        """Get environment variables for a specific container"""
+        try:
+            task_def_arn = task.get('taskDefinitionArn')
+            if not task_def_arn:
+                return {}
+
+            response = self.ecs.describe_task_definition(taskDefinition=task_def_arn)
+            task_def = response.get('taskDefinition', {})
+
+            for container_def in task_def.get('containerDefinitions', []):
+                if container_def.get('name') == container_name:
+                    env_vars = {}
+                    for env in container_def.get('environment', []):
+                        env_vars[env['name']] = env['value']
+                    return env_vars
+
+            return {}
+        except Exception as e:
+            console.print(f"[red]Error getting env vars: {e}[/red]")
+            return {}
+
     def get_log_events(self, log_group: str, log_stream: str,
                        start_time: Optional[int] = None,
                        end_time: Optional[int] = None,

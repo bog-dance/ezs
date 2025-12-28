@@ -232,7 +232,7 @@ class ECSConnectApp(App):
         self.resume_context = resume_context
 
         # State
-        self.step = "cluster"  # cluster, service, task, container, confirm, time_select
+        self.step = "cluster"  # cluster, service, task, task_menu, container, confirm, time_select
         self.selected_cluster = None
         self.selected_service = None
         self.selected_task = None
@@ -581,6 +581,27 @@ class ECSConnectApp(App):
             return f"{task_id}  [{instance_id}]"
         return task_id
 
+    def _go_to_task_menu(self) -> None:
+        """Go to task menu (actions for task)"""
+        self.step = "task_menu"
+        self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
+
+        search = self.query_one("#search", Input)
+        search.value = ""
+        search.placeholder = ""
+
+        options = [
+            ("connect", "Connect to Container"),
+            ("logs", "View Task Logs (All Containers)"),
+        ]
+
+        self._render_list_view(
+            "Select Task Action",
+            options,
+            lambda x: x[1]
+        )
+        search.focus()
+
     def _go_to_container(self) -> None:
         """Go to container selection"""
         self.step = "container"
@@ -644,7 +665,10 @@ class ECSConnectApp(App):
 
     def _render_confirm_view(self, filter_text: str = "") -> None:
         """Render confirm view with SSH and Logs sections side by side"""
-        self._set_title("Select Action")
+        title = "Select Action"
+        if self.selected_container:
+            title += f" - {self.selected_container.get('name', '')}"
+        self._set_title(title)
         self._clear_scroll_area()
 
         scroll = self.query_one("#scroll-area", VerticalScroll)
@@ -653,6 +677,7 @@ class ECSConnectApp(App):
         self._all_ssh_items = [
             ("container", "container"),
             ("ssh", "host"),
+            ("env_vars", "env variables"),
         ]
         self._all_logs_items = [
             ("logs_live", "live logs"),
@@ -775,6 +800,14 @@ class ECSConnectApp(App):
                 'region': self.selected_cluster['region']
             }
             self.exit()
+        elif choice == "env_vars":
+            self.result = {
+                'type': 'env_vars',
+                'task': self.selected_task,
+                'container': self.selected_container,
+                'region': self.selected_cluster['region']
+            }
+            self.exit()
         elif choice == "logs_live":
             # Live logs
             self.result = {
@@ -843,7 +876,21 @@ class ECSConnectApp(App):
         elif self.step == "task":
             self.selected_task = item
             self._set_status(f"Selected: {extract_name_from_arn(item['taskArn'])}")
-            self._go_to_container()
+            self._go_to_task_menu()
+
+        elif self.step == "task_menu":
+            # item is (action_key, label)
+            action = item[0]
+            if action == "connect":
+                self._go_to_container()
+            elif action == "logs":
+                self.result = {
+                    'type': 'task_logs_live',
+                    'cluster': self.selected_cluster,
+                    'task': self.selected_task,
+                    'region': self.selected_cluster['region']
+                }
+                self.exit()
 
         elif self.step == "container":
             self.selected_container = item
@@ -876,10 +923,12 @@ class ECSConnectApp(App):
             self._go_to_cluster()
         elif self.step == "task":
             self._go_to_service()
-        elif self.step == "container":
+        elif self.step == "task_menu":
             self._go_to_task()
+        elif self.step == "container":
+            self._go_to_task_menu()
         elif self.step == "confirm":
-            self._go_to_service()  # Skip task/container auto-select
+            self._go_to_service()  # Go back to start of flow (can be refined to go to container list)
         elif self.step == "time_select":
             self._go_to_confirm(self._instance_id)
 
@@ -901,6 +950,18 @@ class ECSConnectApp(App):
                 f"Select Task ({extract_name_from_arn(self.selected_service)})",
                 self.tasks,
                 self._display_task,
+                filter_text=event.value
+            )
+        elif self.step == "task_menu":
+             # No filtering needed for 2 options, but good practice
+            options = [
+                ("connect", "Connect to Container"),
+                ("logs", "View Task Logs (All Containers)"),
+            ]
+            self._render_list_view(
+                "Select Task Action",
+                options,
+                lambda x: x[1],
                 filter_text=event.value
             )
         elif self.step == "container":
@@ -1067,18 +1128,18 @@ class ECSConnectApp(App):
             # Auto-select if only one task
             if len(self.tasks) == 1:
                 self.selected_task = self.tasks[0]
-                self._go_to_container()
+                self._go_to_task_menu()
                 return
             self._render_task_view()
 
         elif worker_name == "fetch_container_info":
             if result.get('error') == 'no_instance':
                 self._set_status("Could not determine EC2 instance")
-                self._go_to_task()
+                self._go_to_task_menu()
                 return
             if result.get('error') == 'no_ssm':
                 self._set_status(f"Instance {result['instance_id']} not accessible via SSM")
-                self._go_to_task()
+                self._go_to_task_menu()
                 return
 
             self._instance_id = result['instance_id']

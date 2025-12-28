@@ -13,6 +13,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.align import Align
 from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.widgets import Static, LoadingIndicator
+from textual.containers import Container
+from textual.worker import WorkerState
 from .config import REGIONS, reload_regions
 from .config_manager import config_exists
 from .aws_client import AWSClient
@@ -28,6 +32,68 @@ from .ssm_session import (
 )
 
 console = Console()
+
+
+class ClusterLoadingApp(App):
+    """Loading screen while fetching clusters"""
+
+    CSS = """
+    Screen {
+        background: #08060d;
+        align: center middle;
+    }
+
+    #loading-box {
+        width: 50;
+        height: auto;
+        background: #1a1520;
+        border: solid #5c4a6e;
+        padding: 1 2;
+    }
+
+    #loading-box LoadingIndicator {
+        width: 100%;
+        height: 3;
+        color: #a99fc4;
+        background: transparent;
+    }
+
+    #loading-box Static {
+        width: 100%;
+        text-align: center;
+        color: #a99fc4;
+        background: transparent;
+    }
+    """
+
+    def __init__(self, regions: dict, profile: str = None):
+        super().__init__()
+        self.regions = regions
+        self.profile = profile
+        self.clusters = None
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            LoadingIndicator(),
+            Static("Retrieving ECS clusters..."),
+            id="loading-box"
+        )
+
+    def on_mount(self) -> None:
+        self.run_worker(self._fetch_clusters, name="fetch_clusters", thread=True)
+
+    def _fetch_clusters(self) -> list:
+        return AWSClient.list_all_clusters(self.regions, profile=self.profile)
+
+    def on_worker_state_changed(self, event) -> None:
+        if event.worker.name != "fetch_clusters":
+            return
+
+        if event.state == WorkerState.SUCCESS:
+            self.clusters = event.worker.result
+            self.exit(result="success")
+        elif event.state == WorkerState.ERROR:
+            self.exit(result="error")
 
 
 def stream_live_logs(result: dict, profile: str = None):
@@ -207,13 +273,15 @@ def main():
     else:
         regions = REGIONS
 
-    # Fetch clusters from configured regions
-    console.print("[cyan]Fetching ECS clusters from all regions...[/cyan]")
-    clusters = AWSClient.list_all_clusters(regions, profile=args.profile)
+    # Fetch clusters from configured regions with loading UI
+    loader = ClusterLoadingApp(regions, profile=args.profile)
+    result = loader.run()
 
-    if not clusters:
+    if result != "success" or not loader.clusters:
         console.print("[red]No ECS clusters found in any region.[/red]")
         sys.exit(1)
+
+    clusters = loader.clusters
 
     # Run the interactive UI (stays in Textual until SSH session)
     resume_context = None

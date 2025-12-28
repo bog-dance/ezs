@@ -72,17 +72,11 @@ class EditModal(ModalScreen):
     }
     """
 
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
-        Binding("tab", "focus_next", "Next", show=False),
-        Binding("shift+tab", "focus_previous", "Previous", show=False),
-    ]
-
     def __init__(self, key: str, value: str):
         super().__init__()
         self.key = key
         self.original_value = value
-        self._focus_on_buttons = False
+        self._focus_index = 0  # 0=input, 1=cancel, 2=save
 
     def compose(self) -> ComposeResult:
         yield Container(
@@ -98,8 +92,35 @@ class EditModal(ModalScreen):
         )
 
     def on_mount(self) -> None:
-        # Focus Save button by default
-        self.query_one("#save", Button).focus()
+        # Focus Input field so user can type immediately
+        self.query_one("#edit-input", Input).focus()
+        self._focus_index = 0
+
+    def on_key(self, event) -> None:
+        """Handle Tab to cycle focus and Escape to cancel"""
+        if event.key == "escape":
+            self.dismiss(None)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "tab":
+            self._focus_index = (self._focus_index + 1) % 3
+            self._apply_focus()
+            event.prevent_default()
+            event.stop()
+        elif event.key == "shift+tab":
+            self._focus_index = (self._focus_index - 1) % 3
+            self._apply_focus()
+            event.prevent_default()
+            event.stop()
+
+    def _apply_focus(self) -> None:
+        """Apply focus to current element"""
+        if self._focus_index == 0:
+            self.query_one("#edit-input", Input).focus()
+        elif self._focus_index == 1:
+            self.query_one("#cancel", Button).focus()
+        else:
+            self.query_one("#save", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save":
@@ -241,9 +262,9 @@ class CommandPalette(ModalScreen):
             Static("Commands", id="title"),
             ListView(
                 ListItem(Static("Edit Variable (Ctrl+E)"), id="edit"),
-                ListItem(Static("Register Task Revision (Ctrl+Y)"), id="register"),
+                ListItem(Static("Copy Filtered Variables (Ctrl+S)"), id="copy"),
+                ListItem(Static("Reveal/Hide Secret (Ctrl+R)"), id="reveal"),
                 ListItem(Static("Update Service (Ctrl+U)"), id="update"),
-                ListItem(Static("Copy Value (Ctrl+C)"), id="copy"),
                 ListItem(Static("Close (Esc)"), id="close"),
             ),
             id="palette-container"
@@ -271,7 +292,7 @@ class SuccessModal(ModalScreen):
 
     #success-dialog {
         background: #1a1520;
-        border: solid #98c379;
+        border: solid #5c4a6e;
         padding: 1 2;
         width: 70;
         max-width: 90%;
@@ -281,7 +302,7 @@ class SuccessModal(ModalScreen):
     #success-title {
         text-align: center;
         text-style: bold;
-        color: #98c379;
+        color: #a99fc4;
         margin-bottom: 1;
     }
 
@@ -313,7 +334,6 @@ class SuccessModal(ModalScreen):
     """
 
     BINDINGS = [
-        Binding("escape", "close", "Close", show=False, priority=True),
         Binding("enter", "close", "Close", show=False, priority=True),
     ]
 
@@ -335,6 +355,13 @@ class SuccessModal(ModalScreen):
 
     def on_mount(self) -> None:
         self.query_one("#ok", Button).focus()
+
+    def on_key(self, event) -> None:
+        """Handle Escape to close modal"""
+        if event.key == "escape":
+            self.dismiss()
+            event.prevent_default()
+            event.stop()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss()
@@ -396,7 +423,6 @@ class ErrorModal(ModalScreen):
     """
 
     BINDINGS = [
-        Binding("escape", "close", "Close", show=False, priority=True),
         Binding("enter", "close", "Close", show=False, priority=True),
     ]
 
@@ -418,6 +444,13 @@ class ErrorModal(ModalScreen):
 
     def on_mount(self) -> None:
         self.query_one("#ok", Button).focus()
+
+    def on_key(self, event) -> None:
+        """Handle Escape to close modal"""
+        if event.key == "escape":
+            self.dismiss()
+            event.prevent_default()
+            event.stop()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss()
@@ -484,9 +517,13 @@ class EnvEditorApp(App):
     #status-bar {
         dock: bottom;
         height: 1;
-        background: #2a2536;
-        color: #8a7fa0;
+        background: #3d3556;
+        color: #a99fc4;
         padding: 0 1;
+    }
+
+    Footer {
+        dock: bottom;
     }
 
     .dirty {
@@ -498,7 +535,8 @@ class EnvEditorApp(App):
         Binding("escape", "quit_check", "Back", show=True, priority=True),
         Binding("ctrl+p", "command_palette", "Commands", show=True, priority=True),
         Binding("ctrl+e", "edit_variable", "Edit", show=True, priority=True),
-        Binding("ctrl+y", "register_task", "Register", show=True, priority=True),
+        Binding("ctrl+s", "copy_filtered", "Copy", show=True, priority=True),
+        Binding("ctrl+r", "toggle_reveal", "Reveal", show=True, priority=True),
         Binding("ctrl+u", "update_service", "Deploy", show=True, priority=True),
         Binding("up", "cursor_up", show=False),
         Binding("down", "cursor_down", show=False),
@@ -552,14 +590,23 @@ class EnvEditorApp(App):
         for key in self._filtered_keys:
             val = self.current_env_vars.get(key, "")
 
+            # Mask secret values with asterisks
+            display_val = val
+            if key in self.secrets_map:
+                # Check if revealed (no prefix means revealed)
+                if val.startswith('[SECURE]') or val.startswith('[SECRET]'):
+                    # Masked - show asterisks
+                    display_val = "********"
+                # else: revealed - show actual value
+
             # Check if modified
             orig = self.original_env_vars.get(key)
             if orig != val:
                 key_display = Text(key, style="bold #ffaa00")
-                val_display = Text(str(val), style="#ffaa00")
+                val_display = Text(str(display_val), style="#ffaa00")
             else:
                 key_display = key
-                val_display = str(val)
+                val_display = str(display_val)
 
             table.add_row(key_display, val_display, key=key)
 
@@ -579,7 +626,7 @@ class EnvEditorApp(App):
         if len(self._filtered_keys) != len(self._all_keys):
             status.update(f"{len(self._filtered_keys)} of {len(self._all_keys)} variables")
         elif self.dirty:
-            status.update("Modified - Press Ctrl+Y to register")
+            status.update("Modified")
         else:
             status.update(f"{len(self._all_keys)} variables")
 
@@ -631,24 +678,96 @@ class EnvEditorApp(App):
     def _handle_command_choice(self, choice: str) -> None:
         if choice == "edit":
             self.action_edit_variable()
-        elif choice == "register":
-            self.action_register_task()
+        elif choice == "reveal":
+            self.action_toggle_reveal()
         elif choice == "update":
             self.action_update_service()
         elif choice == "copy":
             self._copy_selected()
 
     def _copy_selected(self) -> None:
-        """Copy selected variable to clipboard"""
+        """Copy all filtered variables to clipboard (called from Command Palette)"""
+        self.action_copy_filtered()
+
+    def action_copy_filtered(self) -> None:
+        """Copy all filtered variables to clipboard"""
+        if not self._filtered_keys:
+            self._set_status("No variables to copy.", is_error=True)
+            return
+
+        # Build KEY=VALUE lines for all filtered variables
+        lines = []
+        for key in self._filtered_keys:
+            value = self.current_env_vars.get(key, "")
+            # Get raw value (unmask for copying)
+            if key in self.secrets_map:
+                # For secrets, use the stored value without mask
+                raw_value = self._get_raw_secret_value(key)
+                lines.append(f"{key}={raw_value}")
+            else:
+                lines.append(f"{key}={value}")
+
+        clip_text = "\n".join(lines)
+        self.copy_to_clipboard(clip_text)
+        self.push_screen(SuccessModal("Copied", f"{len(self._filtered_keys)} variables copied to clipboard."))
+
+    def _get_raw_secret_value(self, key: str) -> str:
+        """Get raw value for a secret key (without mask)"""
+        value = self.current_env_vars.get(key, "")
+        # Remove any prefix markers
+        if value.startswith('[SECURE]'):
+            return value[8:]
+        elif value.startswith('[SECRET]'):
+            return value[8:]
+        return value
+
+    def action_toggle_reveal(self) -> None:
+        """Reveal secret value for 2 seconds then hide again"""
         table = self.query_one(DataTable)
         if table.cursor_row is None or table.cursor_row >= len(self._filtered_keys):
+            self._set_status("No variable selected", is_error=True)
             return
 
         key = self._filtered_keys[table.cursor_row]
+
+        # Only works for secrets
+        if key not in self.secrets_map:
+            self._set_status("Not a secret variable", is_error=True)
+            return
+
         value = self.current_env_vars.get(key, "")
-        clip_text = f"{key}={value}"
-        self.copy_to_clipboard(clip_text)
-        self._set_status(f"Copied: {key}")
+
+        # Only reveal if currently hidden
+        if value.startswith('[SECURE]'):
+            # Reveal: remove prefix temporarily
+            revealed_value = value[8:]
+            self.current_env_vars[key] = revealed_value
+            self._refresh_table()
+            self._set_status(f"Revealed: {key} (hiding in 2s)")
+            # Schedule hide after 2 seconds
+            self.set_timer(2.0, lambda: self._hide_secret(key, 'ssm', revealed_value))
+        elif value.startswith('[SECRET]'):
+            # Reveal: remove prefix temporarily
+            revealed_value = value[8:]
+            self.current_env_vars[key] = revealed_value
+            self._refresh_table()
+            self._set_status(f"Revealed: {key} (hiding in 2s)")
+            # Schedule hide after 2 seconds
+            self.set_timer(2.0, lambda: self._hide_secret(key, 'secretsmanager', revealed_value))
+        else:
+            self._set_status("Already revealed", is_error=True)
+
+    def _hide_secret(self, key: str, secret_type: str, value: str) -> None:
+        """Hide secret after timeout"""
+        # Only hide if still revealed (user might have edited it)
+        current = self.current_env_vars.get(key, "")
+        if current == value:  # Still the same revealed value
+            if secret_type == 'ssm':
+                self.current_env_vars[key] = f'[SECURE]{value}'
+            else:
+                self.current_env_vars[key] = f'[SECRET]{value}'
+            self._refresh_table()
+            self._set_status(f"Hidden: {key}")
 
     def action_edit_variable(self) -> None:
         """Edit currently selected variable"""
@@ -670,6 +789,8 @@ class EnvEditorApp(App):
 
     def _handle_edit_result(self, key: str, new_value: Optional[str]) -> None:
         if new_value is None:
+            # Cancel - just refresh table to restore view
+            self._refresh_table()
             return
 
         old_value = self.current_env_vars.get(key, "")
@@ -699,7 +820,7 @@ class EnvEditorApp(App):
             self.current_env_vars[key] = new_value
             self.dirty = True
             self._refresh_table()
-            self._set_status(f"Edited {key}. Press Ctrl+Y to register changes.")
+            self._set_status(f"Edited {key}")
 
     def _handle_secret_update_confirm(self, confirm: bool) -> None:
         if not confirm or not self._pending_update:
@@ -725,50 +846,9 @@ class EnvEditorApp(App):
             self.aws.update_secrets_manager(arn, new_value, json_key)
             return {'type': 'secretsmanager', 'arn': arn, 'json_key': json_key, 'key': info['key']}
 
-    def action_register_task(self) -> None:
-        """Register new task definition revision"""
-        if not self.dirty:
-            self._set_status("No changes to register.")
-            return
-
-        self.push_screen(
-            ConfirmationModal("Register new Task Definition revision?"),
-            self._handle_register_confirm
-        )
-
-    def _handle_register_confirm(self, confirm: bool) -> None:
-        if not confirm:
-            return
-
-        self._set_status("Registering new task definition...")
-        # Run in worker thread to not block UI
-        self.run_worker(self._do_register, name="register", thread=True)
-
-    def _do_register(self) -> str:
-        """Actually register the task definition"""
-        return self.aws.register_task_definition(
-            self.original_task_def_arn,
-            self.container_name,
-            self.current_env_vars
-        )
-
     def on_worker_state_changed(self, event) -> None:
         """Handle worker completion"""
-        if event.worker.name == "register":
-            if event.state == WorkerState.SUCCESS:
-                new_arn = event.worker.result
-                self.new_task_def_arn = new_arn
-                self.dirty = False
-                self.original_task_def_arn = new_arn
-                self.original_env_vars = self.current_env_vars.copy()
-                self._refresh_table()
-                self._set_status(f"Registered: {new_arn.split('/')[-1]}. Press Ctrl+U to deploy.")
-            elif event.state == WorkerState.ERROR:
-                error_msg = str(event.worker.error) if event.worker.error else "Unknown error"
-                self._set_status("Registration failed", is_error=True)
-                self.push_screen(ErrorModal("Registration Failed", error_msg))
-
-        elif event.worker.name == "update_service":
+        if event.worker.name == "update_service":
             if event.state == WorkerState.SUCCESS:
                 self._set_status("Service update initiated. Deployment started.")
                 self.push_screen(SuccessModal("Deployment Started", "Service force update initiated.\nNew tasks will be deployed."))

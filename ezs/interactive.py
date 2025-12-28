@@ -2,12 +2,101 @@
 
 from typing import List, Optional, Union, Dict, Any, Callable
 from textual.app import App, ComposeResult
-from textual.widgets import Input, OptionList, Static, LoadingIndicator
+from textual.widgets import Input, OptionList, Static, LoadingIndicator, Button
 from textual.widgets.option_list import Option
 from textual.containers import Container, VerticalScroll, Horizontal
 from textual.binding import Binding
 from textual.worker import Worker, WorkerState
+from textual.screen import ModalScreen
 from .aws_client import extract_name_from_arn
+
+
+class ExitConfirmModal(ModalScreen):
+    """Modal to confirm exit"""
+
+    CSS = """
+    ExitConfirmModal {
+        align: center middle;
+        background: #000000 50%;
+    }
+
+    #exit-dialog {
+        background: #1a1520;
+        border: solid #5c4a6e;
+        padding: 1 2;
+        width: 40;
+        height: auto;
+    }
+
+    #exit-message {
+        text-align: center;
+        color: #a99fc4;
+        margin: 1 0 2 0;
+    }
+
+    #exit-btns {
+        width: 100%;
+        align: center middle;
+        height: 3;
+    }
+
+    .modal-btn {
+        margin: 0 1;
+        min-width: 10;
+        background: #3d3556;
+        color: #a99fc4;
+    }
+
+    .modal-btn:focus {
+        background: #5c4a6e;
+        color: #ffffff;
+    }
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._focus_index = 0  # 0=No, 1=Yes
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static("Exit EZS?", id="exit-message"),
+            Horizontal(
+                Button("No", id="no", classes="modal-btn"),
+                Button("Yes", id="yes", classes="modal-btn"),
+                id="exit-btns"
+            ),
+            id="exit-dialog"
+        )
+
+    def on_mount(self) -> None:
+        self._focus_index = 0
+        self.query_one("#no", Button).focus()
+
+    def on_key(self, event) -> None:
+        """Handle keys"""
+        if event.key == "escape":
+            self.dismiss(False)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "y":
+            self.dismiss(True)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "n":
+            self.dismiss(False)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "tab":
+            self._focus_index = (self._focus_index + 1) % 2
+            if self._focus_index == 0:
+                self.query_one("#no", Button).focus()
+            else:
+                self.query_one("#yes", Button).focus()
+            event.prevent_default()
+            event.stop()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
 
 
 HELP_TEXT = """
@@ -1124,8 +1213,7 @@ class ECSConnectApp(App):
     def _handle_back(self) -> None:
         """Handle back navigation"""
         if self.step == "cluster":
-            self.cancelled = True
-            self.exit()
+            self.push_screen(ExitConfirmModal(), self._handle_exit_confirm)
         elif self.step == "service":
             self._go_to_cluster()
         elif self.step == "task":
@@ -1153,6 +1241,12 @@ class ECSConnectApp(App):
                     self._go_to_task()
         elif self.step == "time_select":
             self._go_to_confirm(self._instance_id)
+
+    def _handle_exit_confirm(self, should_exit: bool) -> None:
+        """Handle exit confirmation result"""
+        if should_exit:
+            self.cancelled = True
+            self.exit()
 
     # ==================== EVENT HANDLERS ====================
 
@@ -1350,9 +1444,8 @@ class ECSConnectApp(App):
         pass
 
     def action_quit_app(self) -> None:
-        """Quit application"""
-        self.cancelled = True
-        self.exit()
+        """Quit application - show confirmation"""
+        self.push_screen(ExitConfirmModal(), self._handle_exit_confirm)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         """Handle worker completion"""

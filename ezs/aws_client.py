@@ -361,6 +361,59 @@ class AWSClient:
             console.print(f"[red]Error getting env vars: {e}[/red]")
             return {}
 
+    def register_task_definition(self, original_task_def_arn: str, container_name: str, new_env_vars: Dict[str, str]) -> str:
+        """
+        Create a new task definition revision with updated environment variables.
+        Returns the new task definition ARN.
+        """
+        try:
+            # 1. Fetch original definition
+            response = self.ecs.describe_task_definition(taskDefinition=original_task_def_arn)
+            task_def = response.get('taskDefinition', {})
+
+            # 2. Clean up read-only fields
+            fields_to_remove = [
+                'taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
+                'compatibilities', 'registeredAt', 'registeredBy'
+            ]
+            new_def = {k: v for k, v in task_def.items() if k not in fields_to_remove}
+
+            # 3. Update container environment
+            updated = False
+            for container in new_def.get('containerDefinitions', []):
+                if container['name'] == container_name:
+                    # Convert dict to list of {name, value}
+                    env_list = [{'name': k, 'value': v} for k, v in new_env_vars.items()]
+                    container['environment'] = env_list
+                    updated = True
+                    break
+
+            if not updated:
+                raise ValueError(f"Container {container_name} not found in task definition")
+
+            # 4. Register new definition
+            response = self.ecs.register_task_definition(**new_def)
+            new_arn = response['taskDefinition']['taskDefinitionArn']
+            return new_arn
+
+        except Exception as e:
+            console.print(f"[red]Error registering task definition: {e}[/red]")
+            raise
+
+    def update_service(self, cluster: str, service: str, task_def_arn: str) -> bool:
+        """Update service to use new task definition"""
+        try:
+            self.ecs.update_service(
+                cluster=cluster,
+                service=service,
+                taskDefinition=task_def_arn,
+                forceNewDeployment=True
+            )
+            return True
+        except Exception as e:
+            console.print(f"[red]Error updating service: {e}[/red]")
+            raise
+
     def get_log_events(self, log_group: str, log_stream: str,
                        start_time: Optional[int] = None,
                        end_time: Optional[int] = None,

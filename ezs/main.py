@@ -96,9 +96,12 @@ def view_env_vars(result: dict, profile: str = None):
     task = result['task']
     container = result['container']
     region = result['region']
+    cluster = result.get('cluster', {}).get('arn')
+    service = result.get('service')
 
     aws = AWSClient(region=region, profile=profile)
     container_name = container.get('name') if container else None
+    task_def_arn = task.get('taskDefinitionArn')
 
     if not container_name:
         console.print("[red]No container selected[/red]")
@@ -110,9 +113,18 @@ def view_env_vars(result: dict, profile: str = None):
 
     if not env_vars:
         console.print("[yellow]No environment variables found (or error fetching them).[/yellow]")
-        return
+        # We might still want to open viewer to ADD variables, but for now let's respect current logic
+        # Actually, if it's empty, we should still show the editor so they can add/see it's empty.
+        env_vars = {}
 
-    run_env_viewer(env_vars, container_name)
+    run_env_viewer(
+        aws_client=aws,
+        cluster=cluster,
+        service=service,
+        task_def_arn=task_def_arn,
+        container_name=container_name,
+        env_vars=env_vars
+    )
 
 
 def download_logs(result: dict, profile: str = None):

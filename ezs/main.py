@@ -134,8 +134,11 @@ def stream_task_logs(result: dict, profile: str = None):
     )
 
 
-def view_env_vars(result: dict, profile: str = None):
-    """View environment variables for a container"""
+def view_env_vars(result: dict, profile: str = None) -> dict:
+    """View environment variables for a container.
+
+    Returns dict with redeploy info for cache invalidation.
+    """
     from .env_viewer import run_env_viewer_with_loading
     task = result['task']
     container = result['container']
@@ -146,11 +149,11 @@ def view_env_vars(result: dict, profile: str = None):
     container_name = container.get('name') if container else None
 
     if not container_name:
-        return
+        return {'was_redeployed': False}
 
     aws = AWSClient(region=region, profile=profile)
 
-    run_env_viewer_with_loading(
+    return run_env_viewer_with_loading(
         aws_client=aws,
         task=task,
         container_name=container_name,
@@ -159,8 +162,11 @@ def view_env_vars(result: dict, profile: str = None):
     )
 
 
-def view_task_env_vars(result: dict, profile: str = None):
-    """View environment variables for all containers in task"""
+def view_task_env_vars(result: dict, profile: str = None) -> dict:
+    """View environment variables for all containers in task.
+
+    Returns dict with redeploy info for cache invalidation.
+    """
     from .env_viewer import run_env_viewer_with_loading
     task = result['task']
     region = result['region']
@@ -170,13 +176,13 @@ def view_task_env_vars(result: dict, profile: str = None):
     containers = task.get('containers', [])
 
     if not containers:
-        return
+        return {'was_redeployed': False}
 
     # Use first container
     container_name = containers[0].get('name')
     aws = AWSClient(region=region, profile=profile)
 
-    run_env_viewer_with_loading(
+    return run_env_viewer_with_loading(
         aws_client=aws,
         task=task,
         container_name=container_name,
@@ -267,11 +273,14 @@ def main():
             'task': result.get('task'),
             'container': result.get('container'),
             'instance_id': result.get('instance_id'),
-            # Cached data for faster resume
-            'services': result.get('services'),
-            'tasks': result.get('tasks'),
-            'containers': result.get('containers'),
+            # ALL cached data for faster resume
+            'cached_services': result.get('cached_services', {}),
+            'cached_tasks': result.get('cached_tasks', {}),
+            'cached_containers': result.get('cached_containers', {}),
         }
+
+        # Track redeployed services for cache invalidation
+        redeployed_service = None
 
         # Start the appropriate session
         if result['type'] == 'ssh':
@@ -291,11 +300,19 @@ def main():
         elif result['type'] == 'task_logs_live':
             stream_task_logs(result, args.profile)
         elif result['type'] == 'env_vars':
-            view_env_vars(result, args.profile)
+            env_result = view_env_vars(result, args.profile)
+            if env_result and env_result.get('was_redeployed'):
+                redeployed_service = result.get('service')
         elif result['type'] == 'task_env_vars':
-            view_task_env_vars(result, args.profile)
+            env_result = view_task_env_vars(result, args.profile)
+            if env_result and env_result.get('was_redeployed'):
+                redeployed_service = result.get('service')
         elif result['type'] == 'logs_download':
             download_logs(result, args.profile)
+
+        # If a service was redeployed, add to resume_context for cache invalidation
+        if redeployed_service:
+            resume_context['invalidate_service'] = redeployed_service
 
 
 if __name__ == '__main__':

@@ -6,8 +6,59 @@ import os
 import sys
 from typing import Optional
 from rich.console import Console
+from textual.app import App, ComposeResult
+from textual.widgets import Static, LoadingIndicator
+from textual.containers import Container
 
 console = Console()
+
+
+class ConnectingApp(App):
+    """Loading screen while connecting to SSH/container"""
+
+    CSS = """
+    Screen {
+        background: #08060d;
+        align: center middle;
+    }
+
+    #loading-box {
+        width: 50;
+        height: auto;
+        background: #1a1520;
+        border: solid #5c4a6e;
+        padding: 1 2;
+    }
+
+    #loading-box LoadingIndicator {
+        width: 100%;
+        height: 3;
+        color: #a99fc4;
+        background: transparent;
+    }
+
+    #loading-box Static {
+        width: 100%;
+        text-align: center;
+        color: #a99fc4;
+        background: transparent;
+    }
+    """
+
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            LoadingIndicator(),
+            Static(self.message),
+            id="loading-box"
+        )
+
+    def on_mount(self) -> None:
+        # Exit after a brief moment to show the loading screen
+        self.set_timer(0.5, self.exit)
 
 
 def reset_terminal():
@@ -77,7 +128,9 @@ def get_container_id(instance_id: str, container_name: str, region: str) -> Opti
 
 def start_ssh_session(instance_id: str, region: str):
     """Start SSM session to EC2 instance (SSH mode)"""
-    console.print(f"[green]Connecting to {instance_id}...[/green]")
+    # Show loading screen
+    app = ConnectingApp(f"Connecting to {instance_id}...")
+    app.run()
 
     try:
         subprocess.run([
@@ -97,7 +150,10 @@ def start_container_session(instance_id: str, container_id: str, region: str):
     """Start SSM session and exec into Docker container"""
     # Take only first container ID if multiple returned, and clean it
     container_id = container_id.strip().split('\n')[0].split()[0]
-    console.print(f"[green]Connecting to container {container_id[:12]}...[/green]")
+
+    # Show loading screen
+    app = ConnectingApp(f"Connecting to container {container_id[:12]}...")
+    app.run()
 
     docker_command = f"sudo docker exec -it {container_id} /bin/sh"
 

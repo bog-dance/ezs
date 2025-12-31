@@ -453,17 +453,10 @@ class ECSConnectApp(App):
     }
 
     #status {
-        dock: bottom;
+        dock: top;
         height: 1;
-        background: #3d3556;
-        color: #a99fc4;
-        padding: 0 1;
-    }
-
-    #counter {
-        dock: bottom;
-        height: 1;
-        background: #0f0c16;
+        width: 100%;
+        background: #1a1520;
         color: #6a6080;
         padding: 0 1;
     }
@@ -662,10 +655,9 @@ class ECSConnectApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static("Select ECS Cluster", id="title")
+        yield Static("", id="status")
         yield CustomInput(placeholder="Type to filter...", id="search")
         yield VerticalScroll(id="scroll-area")
-        yield Static("", id="counter")
-        yield Static("", id="status")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -677,15 +669,41 @@ class ECSConnectApp(App):
             self.selected_container = self.resume_context.get('container')
             self._instance_id = self.resume_context.get('instance_id')
 
-            # Restore cached data
-            if 'services' in self.resume_context and self.resume_context['services'] is not None:
+            # Restore ALL cached data
+            if self.resume_context.get('cached_services'):
+                self.cached_services = self.resume_context['cached_services']
+            if self.resume_context.get('cached_tasks'):
+                self.cached_tasks = self.resume_context['cached_tasks']
+            if self.resume_context.get('cached_containers'):
+                self.cached_containers = self.resume_context['cached_containers']
+
+            # Invalidate cache for redeployed service (from env_viewer)
+            invalidate_service = self.resume_context.get('invalidate_service')
+            if invalidate_service and self.selected_cluster:
                 cluster_arn = self.selected_cluster['arn']
-                self.services = self.resume_context['services']
-                self.cached_services[cluster_arn] = self.services
-            if 'tasks' in self.resume_context and self.resume_context['tasks'] is not None:
-                self.tasks = self.resume_context['tasks']
-            if 'containers' in self.resume_context and self.resume_context['containers'] is not None:
-                self.containers = self.resume_context['containers']
+                cache_key = (cluster_arn, invalidate_service)
+                # Clear tasks cache for this service
+                if cache_key in self.cached_tasks:
+                    old_tasks = self.cached_tasks.get(cache_key, [])
+                    for task in old_tasks:
+                        task_arn = task.get('taskArn')
+                        if task_arn and task_arn in self.cached_containers:
+                            del self.cached_containers[task_arn]
+                    del self.cached_tasks[cache_key]
+
+            # Set current services/tasks/containers from cache if available
+            if self.selected_cluster:
+                cluster_arn = self.selected_cluster['arn']
+                if cluster_arn in self.cached_services:
+                    self.services = self.cached_services[cluster_arn]
+                if self.selected_service:
+                    cache_key = (cluster_arn, self.selected_service)
+                    if cache_key in self.cached_tasks:
+                        self.tasks = self.cached_tasks[cache_key]
+                if self.selected_task:
+                    task_arn = self.selected_task.get('taskArn')
+                    if task_arn in self.cached_containers:
+                        _, self.containers = self.cached_containers[task_arn]
 
             if self.selected_cluster:
                 self.aws = self.aws_client_factory(
@@ -798,13 +816,6 @@ class ECSConnectApp(App):
                 self.nav_list.append((region, idx, c))
                 total_matches += 1
 
-        # Update counter
-        counter = self.query_one("#counter", Static)
-        if filter_text:
-            counter.update(f" {total_matches}/{len(self.all_clusters)} clusters")
-        else:
-            counter.update(f" {len(self.all_clusters)} clusters")
-
         # Reset navigation and highlight first item
         self.nav_index = 0
         if self.nav_list:
@@ -866,13 +877,6 @@ class ECSConnectApp(App):
             option_idx += 1
             total_matches += 1
 
-        # Update counter
-        counter = self.query_one("#counter", Static)
-        if filter_text:
-            counter.update(f" {total_matches}/{len(items)} items")
-        else:
-            counter.update(f" {len(items)} items")
-
         # Highlight first item (not back)
         if self.first_item_idx is not None:
             option_list.highlighted = self.first_item_idx
@@ -911,6 +915,15 @@ class ECSConnectApp(App):
         """Worker: fetch services from AWS"""
         cluster_arn = self.selected_cluster['arn']
         return self.aws.list_services(cluster_arn)
+
+    def _prefetch_cluster(self) -> dict:
+        """Worker: prefetch entire cluster hierarchy"""
+        cluster_arn = self.selected_cluster['arn']
+
+        def update_progress(msg):
+            self.call_from_thread(self._update_loading_message, msg)
+
+        return self.aws.prefetch_cluster_hierarchy(cluster_arn, update_progress)
 
     def _render_service_view(self) -> None:
         """Render service selection view"""
@@ -1064,15 +1077,46 @@ class ECSConnectApp(App):
         """Restore the default status based on current step"""
         self._temp_status_timer = None
         if self.step == "confirm":
-            container_name = self.selected_container.get('name', 'unknown')
-            self._set_status(f"Container: {container_name}")
+            self._update_path_status()
         elif self.step == "task_menu":
-            self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
+            self._update_path_status()
+
+    def _update_path_status(self) -> None:
+        """Update status bar with full path and task info"""
+        cluster_name = self.selected_cluster.get('name', '-') if self.selected_cluster else '-'
+        service_name = extract_name_from_arn(self.selected_service) if self.selected_service else '-'
+        container_name = self.selected_container.get('name', '') if self.selected_container else ''
+        task = self.selected_task
+        if task:
+            task_id = extract_name_from_arn(task.get('taskArn', ''))[:10]
+            instance_ip = task.get('_instanceIp', '-')
+            started_at = task.get('startedAt')
+            if started_at:
+                started_str = started_at.strftime('%Y-%m-%d %H:%M') if hasattr(started_at, 'strftime') else str(started_at)[:16]
+            else:
+                started_str = '-'
+            # Build path: cluster → service → task → container
+            path = f"{cluster_name} → {service_name} → {task_id}"
+            if container_name:
+                path += f" → {container_name}"
+            status_text = f"{path}  ·  IP: {instance_ip}  ·  Started: {started_str}"
+        else:
+            status_text = f"{cluster_name} → {service_name}"
+        self._set_status(status_text)
 
     def _render_task_menu_view(self) -> None:
         """Render task menu with two columns: Containers and Logs"""
-        self._set_title("Select Task Action")
+        # Build title with container name
+        container_name = self.selected_container.get('name', '') if self.selected_container else ''
+        if container_name:
+            self._set_title(f"Select Action — {container_name}")
+        else:
+            self._set_title("Select Action")
+
         self._clear_scroll_area()
+
+        # Show path and task info in status bar
+        self._update_path_status()
 
         scroll = self.query_one("#scroll-area", VerticalScroll)
 
@@ -1116,10 +1160,6 @@ class ECSConnectApp(App):
         self._menu_section = "containers"
         self._menu_sections = ["containers", "logs"]
         self._menu_idx = 0
-
-        # Update counter
-        counter = self.query_one("#counter", Static)
-        counter.update(f" {len(container_items)} containers, 1 log action")
 
         self.call_after_refresh(self._update_menu_highlight)
 
@@ -1213,9 +1253,12 @@ class ECSConnectApp(App):
         """Render confirm view with SSH, Logs, and Configuration sections"""
         title = "Select Action"
         if self.selected_container:
-            title += f" - {self.selected_container.get('name', '')}"
+            title += f" — {self.selected_container.get('name', '')}"
         self._set_title(title)
         self._clear_scroll_area()
+
+        # Show path and task info in status bar
+        self._update_path_status()
 
         scroll = self.query_one("#scroll-area", VerticalScroll)
 
@@ -1279,10 +1322,6 @@ class ECSConnectApp(App):
         self._menu_sections = ["ssh", "logs", "config"]
         self._menu_idx = 0
 
-        # Update counter
-        counter = self.query_one("#counter", Static)
-        counter.update(f" {len(self.ssh_items) + len(self.logs_items) + len(self.config_items)} actions")
-
         self.call_after_refresh(self._update_menu_highlight)
 
     def _filter_confirm_view(self, filter_text: str) -> None:
@@ -1329,10 +1368,6 @@ class ECSConnectApp(App):
                 config_options.add_option(Option(label))
         except Exception:
             pass
-
-        # Update counter
-        counter = self.query_one("#counter", Static)
-        counter.update(f" {len(self.ssh_items) + len(self.logs_items) + len(self.config_items)} actions")
 
         # Reset selection to first available item
         if self.ssh_items:
@@ -1469,8 +1504,6 @@ class ECSConnectApp(App):
         if self.nav_list and 0 <= self.nav_index < len(self.nav_list):
             _, _, cluster = self.nav_list[self.nav_index]
             self.selected_cluster = cluster
-            self._set_status(f"Connecting to {cluster['name']}...")
-            self.refresh()
 
             # Initialize AWS client
             self.aws = self.aws_client_factory(
@@ -1478,7 +1511,22 @@ class ECSConnectApp(App):
                 profile=self.profile
             )
 
-            self._go_to_service()
+            # Check if cluster is already cached
+            cluster_arn = cluster['arn']
+            if cluster_arn in self.cached_services:
+                # Already cached, go directly to service view
+                self.services = self.cached_services[cluster_arn]
+                self.step = "service"
+                self._render_service_view()
+            else:
+                # Prefetch entire cluster hierarchy
+                self._show_loading(f"Loading {cluster['name']}...")
+                self.run_worker(
+                    self._prefetch_cluster,
+                    name="prefetch_cluster",
+                    exclusive=True,
+                    thread=True
+                )
 
     def _handle_list_select(self, item: Any) -> None:
         """Handle selection in list views"""
@@ -1764,7 +1812,27 @@ class ECSConnectApp(App):
         result = event.worker.result
         self._hide_loading()
 
-        if worker_name == "fetch_services":
+        if worker_name == "prefetch_cluster":
+            cluster_arn = self.selected_cluster['arn']
+
+            # Cache services
+            self.services = result.get('services', [])
+            self.cached_services[cluster_arn] = self.services
+
+            # Cache tasks for each service
+            for service_arn, tasks in result.get('tasks', {}).items():
+                cache_key = (cluster_arn, service_arn)
+                self.cached_tasks[cache_key] = tasks
+
+            # Cache containers for each task
+            for task_arn, (instance_id, containers) in result.get('containers', {}).items():
+                self.cached_containers[task_arn] = (instance_id, containers)
+
+            # Go to service view
+            self.step = "service"
+            self._render_service_view()
+
+        elif worker_name == "fetch_services":
             cluster_arn = self.selected_cluster['arn']
             self.services = result
             self.cached_services[cluster_arn] = result
@@ -1846,6 +1914,21 @@ class ECSConnectApp(App):
             success_count = result.get('success_count', 0)
             errors = result.get('errors', [])
             total = result.get('total', 0)
+            redeployed_services = result.get('services', [])
+
+            # Clear cache for redeployed services (tasks will be new)
+            cluster_arn = self.selected_cluster['arn']
+            for service_arn in redeployed_services:
+                cache_key = (cluster_arn, service_arn)
+                # Clear tasks cache for this service
+                if cache_key in self.cached_tasks:
+                    # Also clear container cache for tasks of this service
+                    old_tasks = self.cached_tasks.get(cache_key, [])
+                    for task in old_tasks:
+                        task_arn = task.get('taskArn')
+                        if task_arn and task_arn in self.cached_containers:
+                            del self.cached_containers[task_arn]
+                    del self.cached_tasks[cache_key]
 
             if errors:
                 error_msg = f"Redeployed {success_count}/{total} services.\n\nErrors:\n" + "\n".join(errors)
@@ -1862,6 +1945,10 @@ class ECSConnectApp(App):
             return False
 
     # ==================== REDEPLOY SERVICES ====================
+
+    def check_action_redeploy_services(self) -> bool:
+        """Show Ctrl+U binding only in service selection menu"""
+        return self.step == "service" and bool(self.services)
 
     def action_redeploy_services(self) -> None:
         """Handle redeploy shortcut (Ctrl+U)"""
@@ -1900,7 +1987,7 @@ class ECSConnectApp(App):
             except Exception as e:
                 errors.append(f"{svc_name}: {str(e)}")
 
-        return {'success_count': success_count, 'errors': errors, 'total': total}
+        return {'success_count': success_count, 'errors': errors, 'total': total, 'services': services}
 
     def _update_loading_message(self, message: str) -> None:
         """Update loading message text"""
@@ -2023,9 +2110,9 @@ def run_ecs_connect(clusters: List[dict], aws_client_class, profile: Optional[st
         app.result['task'] = app.selected_task
         app.result['container'] = app.selected_container
         app.result['instance_id'] = getattr(app, '_instance_id', None)
-        # Include cached data for faster resume
-        app.result['services'] = app.services
-        app.result['tasks'] = app.tasks
-        app.result['containers'] = app.containers
+        # Include ALL cached data for faster resume
+        app.result['cached_services'] = app.cached_services
+        app.result['cached_tasks'] = app.cached_tasks
+        app.result['cached_containers'] = app.cached_containers
 
     return app.result

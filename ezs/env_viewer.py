@@ -205,6 +205,45 @@ class ConfirmationModal(ModalScreen):
     def on_mount(self) -> None:
         self.query_one("#no", Button).focus()
 
+    def on_key(self, event) -> None:
+        """Handle keys and stop propagation"""
+        if event.key == "escape":
+            self.dismiss(False)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "y":
+            self.dismiss(True)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "n":
+            self.dismiss(False)
+            event.prevent_default()
+            event.stop()
+        elif event.key in ("tab", "right", "l"):
+            self._switch_focus()
+            event.prevent_default()
+            event.stop()
+        elif event.key in ("shift+tab", "left", "h"):
+            self._switch_focus()
+            event.prevent_default()
+            event.stop()
+        elif event.key == "enter":
+            # Confirm current focused button
+            focused = self.focused
+            if focused and isinstance(focused, Button):
+                focused.press()
+            event.prevent_default()
+            event.stop()
+
+    def _switch_focus(self) -> None:
+        """Switch focus between No and Yes buttons"""
+        no_btn = self.query_one("#no", Button)
+        yes_btn = self.query_one("#yes", Button)
+        if self.focused == no_btn:
+            yes_btn.focus()
+        else:
+            no_btn.focus()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "yes":
             self.dismiss(True)
@@ -555,6 +594,9 @@ class EnvEditorApp(App):
         # Secrets mapping: env_var_name -> {type, path/arn, json_key, full_ref}
         self.secrets_map = secrets_map or {}
 
+        # Track if service was redeployed (for cache invalidation)
+        self.was_redeployed = False
+
         # State
         self.original_env_vars = env_vars.copy()
         self.current_env_vars = env_vars.copy()
@@ -850,6 +892,7 @@ class EnvEditorApp(App):
         """Handle worker completion"""
         if event.worker.name == "update_service":
             if event.state == WorkerState.SUCCESS:
+                self.was_redeployed = True  # Mark for cache invalidation
                 self._set_status("Service update initiated. Deployment started.")
                 self.push_screen(SuccessModal("Deployment Started", "Service force update initiated.\nNew tasks will be deployed."))
             elif event.state == WorkerState.ERROR:
@@ -1055,8 +1098,15 @@ def run_env_viewer(aws_client, cluster: str, service: str, task_def_arn: str,
 
 
 def run_env_viewer_with_loading(aws_client, task: dict, container_name: str,
-                                 cluster: str, service: str):
-    """Run env viewer with loading screen"""
+                                 cluster: str, service: str) -> dict:
+    """Run env viewer with loading screen.
+
+    Returns dict with:
+    - was_redeployed: bool - whether service was redeployed
+    - service: str - service ARN that was redeployed (if any)
+    """
+    result_info = {'was_redeployed': False, 'service': service}
+
     # First show loading screen
     loader = EnvViewerLoadingApp(aws_client, task, container_name)
     result = loader.run()
@@ -1078,3 +1128,8 @@ def run_env_viewer_with_loading(aws_client, task: dict, container_name: str,
             task=task
         )
         app.run()
+
+        # Check if service was redeployed
+        result_info['was_redeployed'] = app.was_redeployed
+
+    return result_info

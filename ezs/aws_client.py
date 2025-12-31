@@ -543,6 +543,92 @@ class AWSClient:
             console.print(f"[red]Error registering task definition: {e}[/red]")
             raise
 
+    def prefetch_cluster_hierarchy(self, cluster_arn: str, progress_callback=None) -> dict:
+        """Fetch entire cluster hierarchy in parallel for caching.
+
+        Returns dict with:
+        - services: list of service ARNs
+        - tasks: dict of service_arn -> list of tasks
+        - containers: dict of task_arn -> (instance_id, containers)
+        """
+        result = {
+            'services': [],
+            'tasks': {},
+            'containers': {}
+        }
+
+        # 1. Fetch all services
+        if progress_callback:
+            progress_callback("Fetching services...")
+        services = self.list_services(cluster_arn)
+        result['services'] = services
+
+        if not services:
+            return result
+
+        if progress_callback:
+            progress_callback(f"Found {len(services)} services, fetching tasks...")
+
+        # 2. Fetch tasks for all services in parallel
+        def fetch_service_tasks(service_arn):
+            tasks = self.list_tasks(cluster_arn, service_arn)
+            if tasks and len(tasks) > 1:
+                tasks = self.enrich_tasks_with_instance_info(cluster_arn, tasks)
+            elif tasks and len(tasks) == 1:
+                # Still enrich single task
+                tasks = self.enrich_tasks_with_instance_info(cluster_arn, tasks)
+            return service_arn, tasks
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(fetch_service_tasks, svc) for svc in services]
+            for future in as_completed(futures):
+                try:
+                    service_arn, tasks = future.result()
+                    result['tasks'][service_arn] = tasks if tasks else []
+                except Exception:
+                    pass
+
+        # Count total tasks
+        total_tasks = sum(len(t) for t in result['tasks'].values())
+        if progress_callback:
+            progress_callback(f"Found {total_tasks} tasks, fetching containers...")
+
+        # 3. Fetch containers for all tasks in parallel
+        all_tasks = []
+        for service_arn, tasks in result['tasks'].items():
+            for task in tasks:
+                all_tasks.append(task)
+
+        if all_tasks:
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = {
+                    executor.submit(self._fetch_task_containers, cluster_arn, task): task['taskArn']
+                    for task in all_tasks
+                }
+                for future in as_completed(futures):
+                    task_arn = futures[future]
+                    try:
+                        instance_id, containers = future.result()
+                        result['containers'][task_arn] = (instance_id, containers)
+                    except Exception:
+                        result['containers'][task_arn] = (None, [])
+
+        if progress_callback:
+            progress_callback("Done!")
+
+        return result
+
+    def _fetch_task_containers(self, cluster_arn: str, task: dict) -> tuple:
+        """Fetch instance_id and containers for a single task"""
+        instance_id = self.get_container_instance_id(cluster_arn, task)
+        # Verify SSM access
+        if instance_id:
+            ssm_ok = self.verify_ssm_access(instance_id)
+            if not ssm_ok:
+                instance_id = None
+        containers = self.get_task_containers(task, exclude_agent=True)
+        return (instance_id, containers)
+
     def update_service(self, cluster: str, service: str, task_def_arn: str = None) -> bool:
         """Update service to use new task definition or force redeploy"""
         try:

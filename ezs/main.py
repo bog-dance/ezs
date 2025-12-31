@@ -22,8 +22,8 @@ from .config_manager import config_exists
 from .aws_client import AWSClient
 from .interactive import run_ecs_connect
 from .setup_wizard import run_setup_wizard
-from .live_logs import run_live_logs
-from .download_logs import run_download_logs
+from .live_logs import run_live_logs, run_live_logs_with_loading, run_task_logs_with_loading
+from .download_logs import run_download_logs, run_download_logs_with_loading
 from .env_viewer import run_env_viewer
 from .ssm_session import (
     check_session_manager_plugin,
@@ -109,26 +109,12 @@ def stream_live_logs(result: dict, profile: str = None):
         console.print("[red]No container selected[/red]")
         return
 
-    console.print(f"[cyan]Getting log configuration for {container_name}...[/cyan]")
-
-    log_group = aws.get_log_group_for_task(task, container_name)
-    log_stream = aws.get_log_stream_for_task(task, container_name)
-
-    if not log_group or not log_stream:
-        console.print("[red]Could not find CloudWatch logs configuration for this container.[/red]")
-        console.print("[yellow]Make sure the container uses awslogs driver.[/yellow]")
-        return
-
-    # Run the Live Logs TUI (single source)
-    source = {
-        'container': container_name,
-        'log_group': log_group,
-        'log_stream': log_stream
-    }
-    run_live_logs(
-        log_sources=[source],
+    # Run with loading screen
+    run_live_logs_with_loading(
         aws_client=aws,
-        title=f"Live Logs: {container_name}",
+        task=task,
+        container_name=container_name,
+        title=f"Live Logs: {container_name}"
     )
 
 
@@ -140,20 +126,11 @@ def stream_task_logs(result: dict, profile: str = None):
     aws = AWSClient(region=region, profile=profile)
     task_id = task.get('taskArn', '').split('/')[-1]
 
-    console.print(f"[cyan]Getting log configuration for task {task_id}...[/cyan]")
-
-    log_sources = aws.get_all_container_log_configs(task)
-
-    if not log_sources:
-        console.print("[red]Could not find any CloudWatch logs configuration for this task.[/red]")
-        return
-
-    console.print(f"[green]Found {len(log_sources)} log streams.[/green]")
-
-    run_live_logs(
-        log_sources=log_sources,
+    # Run with loading screen
+    run_task_logs_with_loading(
         aws_client=aws,
-        title=f"Task Logs: {task_id}",
+        task=task,
+        title=f"Task Logs: {task_id}"
     )
 
 
@@ -222,26 +199,11 @@ def download_logs(result: dict, profile: str = None):
         console.print("[red]No container selected[/red]")
         return
 
-    console.print(f"[cyan]Getting log configuration for {container_name}...[/cyan]")
-
-    log_group = aws.get_log_group_for_task(task, container_name)
-    log_stream = aws.get_log_stream_for_task(task, container_name)
-
-    if not log_group or not log_stream:
-        console.print("[red]Could not find CloudWatch logs configuration for this container.[/red]")
-        console.print("[yellow]Make sure the container uses awslogs driver.[/yellow]")
-        return
-
-    task_id = task.get('taskArn', '').split('/')[-1][:8]
-
-    # Run the Download Logs TUI
-    run_download_logs(
-        log_group=log_group,
-        log_stream=log_stream,
+    run_download_logs_with_loading(
         aws_client=aws,
+        task=task,
         container_name=container_name,
-        task_id=task_id,
-        minutes=minutes,
+        minutes=minutes
     )
 
 

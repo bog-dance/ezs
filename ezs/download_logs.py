@@ -10,8 +10,11 @@ from textual.containers import Container
 from textual.binding import Binding
 from textual.worker import Worker, WorkerState
 
+import subprocess
+import platform
+import os
 from .aws_client import AWSClient
-from .live_logs import parse_log_level
+from .live_logs import parse_log_level, LogLoaderApp
 
 
 class DownloadLogsApp(App):
@@ -243,7 +246,7 @@ class DownloadLogsApp(App):
             result_box = Container(
                 Static("Download Complete", id="result-title"),
                 Static(f"[bold cyan]{total}[/bold cyan] log entries\n\n{stats_line}", id="result-stats"),
-                Static(f"[dim]Saved to:[/dim]\n{filepath}", id="result-path"),
+                Static(f"[dim]Saved to:[/dim]\n[@click=open_file('{filepath}')]{filepath}[/]", id="result-path"),
                 Static("Press Enter to continue", id="result-hint"),
                 id="result-box"
             )
@@ -253,6 +256,19 @@ class DownloadLogsApp(App):
 
     def action_continue(self) -> None:
         self.exit()
+
+    def action_open_file(self, path: str) -> None:
+        """Open file in default editor"""
+        try:
+            if platform.system() == 'Darwin':       # macOS
+                subprocess.call(('open', path))
+            elif platform.system() == 'Windows':    # Windows
+                os.startfile(path)
+            else:                                   # linux variants
+                subprocess.call(('xdg-open', path))
+        except Exception:
+            # Fallback or ignore if fails
+            pass
 
 
 def run_download_logs(
@@ -273,3 +289,26 @@ def run_download_logs(
         minutes=minutes,
     )
     app.run()
+
+
+def run_download_logs_with_loading(
+    aws_client: AWSClient,
+    task: dict,
+    container_name: str,
+    minutes: int = 60,
+) -> None:
+    """Run download logs with loading screen first"""
+    # Use the same loader as live logs
+    loader = LogLoaderApp(aws_client, task, container_name, "Retrieving log configuration...")
+    result = loader.run()
+
+    if result == "success" and loader.result:
+        task_id = task.get('taskArn', '').split('/')[-1][:8]
+        run_download_logs(
+            log_group=loader.result['log_group'],
+            log_stream=loader.result['log_stream'],
+            aws_client=aws_client,
+            container_name=container_name,
+            task_id=task_id,
+            minutes=minutes
+        )

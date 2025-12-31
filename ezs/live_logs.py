@@ -6,8 +6,8 @@ import heapq
 from datetime import datetime
 from typing import Optional, List, Generator, Dict, Any
 from textual.app import App, ComposeResult
-from textual.widgets import Static, RichLog
-from textual.containers import Container, Horizontal
+from textual.widgets import Input, OptionList, Static, LoadingIndicator, Button, Label, RichLog
+from textual.containers import Container, VerticalScroll, Horizontal
 from textual.binding import Binding
 from textual.worker import Worker, WorkerState
 
@@ -228,6 +228,7 @@ class LiveLogsApp(App):
         )
 
     def on_mount(self) -> None:
+        self.query_one(RichLog).focus()
         self._start_streaming()
 
     def _start_streaming(self) -> None:
@@ -267,7 +268,7 @@ class LiveLogsApp(App):
                             'logGroupName': state['source']['log_group'],
                             'logStreamName': state['source']['log_stream'],
                             'startFromHead': False,
-                            'limit': 20
+                            'limit': 500    
                         }
                         if state['next_token']:
                             kwargs['nextToken'] = state['next_token']
@@ -518,7 +519,7 @@ Q / Esc  - quit live logs"""
 
 def run_live_logs(
     log_sources: List[Dict],
-    aws_client: AWSClient,
+    aws_client: Any,
     title: str = "Live Logs",
 ) -> None:
     """Run the live logs TUI"""
@@ -528,3 +529,201 @@ def run_live_logs(
         title=title,
     )
     app.run()
+
+
+class LogLoaderApp(App):
+    """Loading screen while fetching log configuration"""
+
+    CSS = """
+    Screen {
+        background: #08060d;
+        align: center middle;
+    }
+
+    .loading-box {
+        width: 50;
+        height: auto;
+        background: #1a1520;
+        border: solid #5c4a6e;
+        padding: 1 2;
+    }
+
+    .loading-box LoadingIndicator {
+        width: 100%;
+        height: 3;
+        color: #a99fc4;
+        background: transparent;
+    }
+
+    .loading-box Static {
+        width: 100%;
+        text-align: center;
+        color: #a99fc4;
+        background: transparent;
+    }
+
+    .error-box {
+        width: 60;
+        height: auto;
+        background: #1a1520;
+        border: solid #e06c75;
+        padding: 1 2;
+    }
+
+    .error-title {
+        text-align: center;
+        text-style: bold;
+        color: #e06c75;
+        padding: 0 0 1 0;
+    }
+
+    .error-content {
+        text-align: center;
+        color: #a99fc4;
+    }
+
+    .error-hint {
+        text-align: center;
+        color: #6a6080;
+        text-style: italic;
+        padding: 1 0 0 0;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "quit", "Back"),
+    ]
+
+    def __init__(self, aws_client, task: dict, container_name: str, message: str = "Retrieving log configuration..."):
+        super().__init__()
+        self.aws = aws_client
+        self.ecs_task = task
+        self.container_name = container_name
+        self.message = message
+        self.result = None  # Will hold {'log_group': ..., 'log_stream': ...}
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            LoadingIndicator(),
+            Static(self.message),
+            classes="loading-box"
+        )
+
+    def on_mount(self) -> None:
+        self.run_worker(self._fetch_config, name="fetch_config", thread=True)
+
+    def _fetch_config(self) -> dict:
+        log_group = self.aws.get_log_group_for_task(self.ecs_task, self.container_name)
+        log_stream = self.aws.get_log_stream_for_task(self.ecs_task, self.container_name)
+        return {'log_group': log_group, 'log_stream': log_stream}
+
+    def on_worker_state_changed(self, event) -> None:
+        if event.worker.name != "fetch_config":
+            return
+
+        if event.state == WorkerState.SUCCESS:
+            data = event.worker.result
+            if data['log_group'] and data['log_stream']:
+                self.result = data
+                self.exit(result="success")
+            else:
+                self._show_error("Could not find CloudWatch logs configuration.\\nMake sure the container uses 'awslogs' driver.")
+        elif event.state == WorkerState.ERROR:
+            self._show_error(str(event.worker.error))
+
+    def _show_error(self, message: str) -> None:
+        for box in self.query(".loading-box"):
+            box.remove()
+
+        error_box = Container(
+            Static("Error", classes="error-title"),
+            Static(message, classes="error-content"),
+            Static("Press Escape to go back", classes="error-hint"),
+            classes="error-box"
+        )
+        self.mount(error_box)
+
+
+class TaskLogsLoaderApp(App):
+    """Loading screen while fetching log configuration for ALL containers"""
+
+    CSS = LogLoaderApp.CSS
+    BINDINGS = LogLoaderApp.BINDINGS
+
+    def __init__(self, aws_client, task: dict):
+        super().__init__()
+        self.aws = aws_client
+        self.ecs_task = task
+        self.result = None
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            LoadingIndicator(),
+            Static("Discovering log streams for task..."),
+            classes="loading-box"
+        )
+
+    def on_mount(self) -> None:
+        self.run_worker(self._fetch_config, name="fetch_config", thread=True)
+
+    def _fetch_config(self) -> list:
+        return self.aws.get_all_container_log_configs(self.ecs_task)
+
+    def on_worker_state_changed(self, event) -> None:
+        if event.worker.name != "fetch_config":
+            return
+
+        if event.state == WorkerState.SUCCESS:
+            sources = event.worker.result
+            if sources:
+                self.result = sources
+                self.exit(result="success")
+            else:
+                self._show_error("No log configurations found for any container in this task.")
+        elif event.state == WorkerState.ERROR:
+            self._show_error(str(event.worker.error))
+
+    def _show_error(self, message: str) -> None:
+        # Same as LogLoaderApp
+        for box in self.query(".loading-box"):
+            box.remove()
+
+        error_box = Container(
+            Static("Error", classes="error-title"),
+            Static(message, classes="error-content"),
+            Static("Press Escape to go back", classes="error-hint"),
+            classes="error-box"
+        )
+        self.mount(error_box)
+
+
+def run_live_logs_with_loading(
+    aws_client: Any,
+    task: dict,
+    container_name: str,
+    title: str = "Live Logs",
+) -> None:
+    """Run live logs with loading screen first"""
+    loader = LogLoaderApp(aws_client, task, container_name)
+    result = loader.run()
+
+    if result == "success" and loader.result:
+        source = {
+            'container': container_name,
+            'log_group': loader.result['log_group'],
+            'log_stream': loader.result['log_stream']
+        }
+        run_live_logs([source], aws_client, title)
+
+
+def run_task_logs_with_loading(
+    aws_client: Any,
+    task: dict,
+    title: str = "Task Logs",
+) -> None:
+    """Run task logs with loading screen first"""
+    loader = TaskLogsLoaderApp(aws_client, task)
+    result = loader.run()
+
+    if result == "success" and loader.result:
+        run_live_logs(loader.result, aws_client, title)

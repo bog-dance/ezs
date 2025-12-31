@@ -2,12 +2,13 @@
 
 from typing import List, Optional, Union, Dict, Any, Callable
 from textual.app import App, ComposeResult
-from textual.widgets import Input, OptionList, Static, LoadingIndicator, Button
+from textual.widgets import Input, OptionList, Static, LoadingIndicator, Button, SelectionList, Footer
 from textual.widgets.option_list import Option
 from textual.containers import Container, VerticalScroll, Horizontal
 from textual.binding import Binding
 from textual.worker import Worker, WorkerState
 from textual.screen import ModalScreen
+from datetime import datetime
 from .aws_client import extract_name_from_arn
 
 
@@ -99,6 +100,292 @@ class ExitConfirmModal(ModalScreen):
         self.dismiss(event.button.id == "yes")
 
 
+class RedeployServicesModal(ModalScreen):
+    """Modal to select services for force redeployment"""
+
+    CSS = """
+    RedeployServicesModal {
+        align: center middle;
+        background: #000000 50%;
+    }
+
+    #redeploy-dialog {
+        background: #1a1520;
+        border: solid #5c4a6e;
+        padding: 1 2;
+        width: 70;
+        height: auto;
+        max-height: 80%;
+    }
+
+    #redeploy-title {
+        text-align: center;
+        text-style: bold;
+        color: #a99fc4;
+        margin-bottom: 1;
+    }
+
+    #redeploy-hint {
+        text-align: center;
+        color: #6a6080;
+        margin-bottom: 1;
+    }
+
+    #redeploy-services {
+        height: auto;
+        max-height: 20;
+        background: #0f0c16;
+        border: solid #3d3556;
+        margin: 1 0;
+    }
+
+    #redeploy-services:focus {
+        border: solid #5c4a6e;
+    }
+
+    #redeploy-services > .option-list--option-highlighted {
+        background: #b0a7be;
+        color: #08060d;
+    }
+
+    #redeploy-counter {
+        text-align: center;
+        color: #8a7fa0;
+        margin: 0 0 1 0;
+    }
+
+    #redeploy-btns {
+        width: 100%;
+        align: center middle;
+        height: 3;
+    }
+
+    .modal-btn {
+        margin: 0 1;
+        min-width: 12;
+        background: #3d3556;
+        color: #a99fc4;
+    }
+
+    .modal-btn:focus {
+        background: #5c4a6e;
+        color: #ffffff;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False, priority=True),
+        Binding("space", "toggle_service", "Toggle", show=True, priority=True),
+        Binding("a", "select_all", "All", show=True, priority=True),
+        Binding("enter", "confirm", "OK", show=True, priority=True),
+    ]
+
+    def __init__(self, services: list):
+        super().__init__()
+        self.services = services
+        self.selected_services: set = set()
+        self._focus_area = "list"  # "list", "cancel", "ok"
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static("Force Redeploy Services", id="redeploy-title"),
+            Static("Space: toggle | A: select all | Enter: confirm", id="redeploy-hint"),
+            OptionList(id="redeploy-services"),
+            Static("0 selected", id="redeploy-counter"),
+            Horizontal(
+                Button("Cancel", id="cancel", classes="modal-btn"),
+                Button("OK", id="ok", classes="modal-btn"),
+                id="redeploy-btns"
+            ),
+            id="redeploy-dialog"
+        )
+
+    def on_mount(self) -> None:
+        self._render_services()
+        self.query_one("#redeploy-services", OptionList).focus()
+
+    def _render_services(self) -> None:
+        """Render services with checkboxes"""
+        option_list = self.query_one("#redeploy-services", OptionList)
+        highlighted = option_list.highlighted
+        option_list.clear_options()
+
+        for svc in self.services:
+            svc_name = extract_name_from_arn(svc)
+            checkbox = "[■]" if svc in self.selected_services else "[ ]"
+            option_list.add_option(Option(f"{checkbox} {svc_name}"))
+
+        # Restore highlight position
+        if highlighted is not None and highlighted < len(self.services):
+            option_list.highlighted = highlighted
+        elif self.services:
+            option_list.highlighted = 0
+
+        self._update_counter()
+
+    def _update_counter(self) -> None:
+        """Update selection counter"""
+        count = len(self.selected_services)
+        total = len(self.services)
+        counter = self.query_one("#redeploy-counter", Static)
+        counter.update(f"{count}/{total} selected")
+
+    def _toggle_current(self) -> None:
+        """Toggle selection of currently highlighted service"""
+        option_list = self.query_one("#redeploy-services", OptionList)
+        idx = option_list.highlighted
+        if idx is not None and 0 <= idx < len(self.services):
+            svc = self.services[idx]
+            if svc in self.selected_services:
+                self.selected_services.discard(svc)
+            else:
+                self.selected_services.add(svc)
+            self._render_services()
+
+    def _select_all(self) -> None:
+        """Select or deselect all services"""
+        if len(self.selected_services) == len(self.services):
+            # All selected -> deselect all
+            self.selected_services.clear()
+        else:
+            # Select all
+            self.selected_services = set(self.services)
+        self._render_services()
+
+    def action_cancel(self) -> None:
+        self.dismiss([])
+
+    def action_toggle_service(self) -> None:
+        if self._focus_area == "list":
+            self._toggle_current()
+
+    def action_select_all(self) -> None:
+        if self._focus_area == "list":
+            self._select_all()
+
+    def action_confirm(self) -> None:
+        self.dismiss(list(self.selected_services))
+
+    def on_key(self, event) -> None:
+        """Handle keyboard navigation"""
+        if event.key == "tab":
+            # Cycle focus: list -> cancel -> ok -> list
+            if self._focus_area == "list":
+                self._focus_area = "cancel"
+                self.query_one("#cancel", Button).focus()
+            elif self._focus_area == "cancel":
+                self._focus_area = "ok"
+                self.query_one("#ok", Button).focus()
+            else:
+                self._focus_area = "list"
+                self.query_one("#redeploy-services", OptionList).focus()
+            event.prevent_default()
+            event.stop()
+        elif event.key == "shift+tab":
+            # Reverse cycle
+            if self._focus_area == "list":
+                self._focus_area = "ok"
+                self.query_one("#ok", Button).focus()
+            elif self._focus_area == "ok":
+                self._focus_area = "cancel"
+                self.query_one("#cancel", Button).focus()
+            else:
+                self._focus_area = "list"
+                self.query_one("#redeploy-services", OptionList).focus()
+            event.prevent_default()
+            event.stop()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "ok":
+            self.dismiss(list(self.selected_services))
+        else:
+            self.dismiss([])
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle click/enter on option - toggle selection"""
+        self._toggle_current()
+
+
+class AlertModal(ModalScreen):
+    """Simple alert modal for displaying messages"""
+
+    CSS = """
+    AlertModal {
+        align: center middle;
+        background: #000000 50%;
+    }
+
+    #alert-dialog {
+        background: #1a1520;
+        border: solid #5c4a6e;
+        padding: 1 2;
+        width: 60;
+        height: auto;
+        max-height: 80%;
+    }
+
+    #alert-msg {
+        text-align: center;
+        color: #e0dce8;
+        margin: 1 0 2 0;
+    }
+
+    #alert-btns {
+        width: 100%;
+        align: center middle;
+        height: 3;
+    }
+
+    .modal-btn {
+        margin: 0 1;
+        min-width: 10;
+        background: #3d3556;
+        color: #a99fc4;
+    }
+
+    .modal-btn:focus {
+        background: #5c4a6e;
+        color: #ffffff;
+    }
+    """
+
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static(self.message, id="alert-msg"),
+            Horizontal(
+                Button("OK", id="ok", classes="modal-btn"),
+                id="alert-btns"
+            ),
+            id="alert-dialog"
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#ok", Button).focus()
+
+    def on_key(self, event) -> None:
+        if event.key in ("escape", "enter"):
+            self.dismiss()
+            event.prevent_default()
+            event.stop()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss()
+
+
+class CustomInput(Input):
+    """Custom Input that doesn't consume Ctrl+U"""
+    BINDINGS = [
+        Binding("ctrl+u", "noop", show=False),
+    ]
+    
+    def action_noop(self):
+        pass
+
+
 HELP_TEXT = """
 [bold]EZS - Keyboard Shortcuts[/bold]
 [dim]ECS, but easy[/dim]
@@ -131,6 +418,8 @@ BACK = BackSignal()
 
 class ECSConnectApp(App):
     """Single persistent app for EZS navigation"""
+
+    ENABLE_COMMAND_PALETTE = False
 
     CSS = """
     Screen {
@@ -305,7 +594,7 @@ class ECSConnectApp(App):
     BINDINGS = [
         Binding("escape", "go_back", "Back", show=True),
         Binding("left", "go_back", "Back", show=False),
-        Binding("enter", "select_current", "Select", show=True),
+        Binding("enter", "select_current", "Select", show=False),
         Binding("right", "select_current", "Select", show=False),
         Binding("ctrl+c", "quit_app", "Exit", show=False),
         Binding("ctrl+d", "quit_app", "Exit", show=False),
@@ -313,6 +602,7 @@ class ECSConnectApp(App):
         Binding("down", "nav_down", "Down", show=False),
         Binding("tab", "noop", show=False),
         Binding("shift+tab", "noop", show=False),
+        Binding("ctrl+u", "redeploy_services", "Redeploy", show=True, priority=True),
     ]
 
     def __init__(self, clusters: List[dict], aws_client_factory, profile: Optional[str] = None,
@@ -372,10 +662,11 @@ class ECSConnectApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static("Select ECS Cluster", id="title")
-        yield Input(placeholder="Type to filter...", id="search")
+        yield CustomInput(placeholder="Type to filter...", id="search")
         yield VerticalScroll(id="scroll-area")
         yield Static("", id="counter")
         yield Static("", id="status")
+        yield Footer()
 
     def on_mount(self) -> None:
         if self.resume_context:
@@ -404,7 +695,7 @@ class ECSConnectApp(App):
                 self._go_to_confirm(self._instance_id)
             else:
                 self._render_cluster_view()
-                self.query_one("#search", Input).focus()
+                self.query_one("#search", CustomInput).focus()
         elif self.initial_cluster:
             # Resume from service selection for the given cluster
             self.selected_cluster = self.initial_cluster
@@ -415,7 +706,7 @@ class ECSConnectApp(App):
             self._go_to_service()
         else:
             self._render_cluster_view()
-            self.query_one("#search", Input).focus()
+            self.query_one("#search", CustomInput).focus()
 
     def _set_status(self, message: str) -> None:
         """Update status bar"""
@@ -592,7 +883,7 @@ class ECSConnectApp(App):
         """Go to cluster selection"""
         self.step = "cluster"
         self._set_status("")
-        search = self.query_one("#search", Input)
+        search = self.query_one("#search", CustomInput)
         search.value = ""
         search.placeholder = "Type to filter clusters..."
         self._render_cluster_view()
@@ -624,7 +915,7 @@ class ECSConnectApp(App):
     def _render_service_view(self) -> None:
         """Render service selection view"""
         self._set_status(f"Cluster: {self.selected_cluster['name']}")
-        search = self.query_one("#search", Input)
+        search = self.query_one("#search", CustomInput)
         search.value = ""
         search.placeholder = "Type to filter services..."
         self._render_list_view(
@@ -672,7 +963,7 @@ class ECSConnectApp(App):
         """Render task selection view"""
         service_name = extract_name_from_arn(self.selected_service)
         self._set_status(f"Service: {service_name}")
-        search = self.query_one("#search", Input)
+        search = self.query_one("#search", CustomInput)
         search.value = ""
         search.placeholder = "Type to filter tasks..."
 
@@ -685,14 +976,31 @@ class ECSConnectApp(App):
 
     def _display_task(self, t: dict) -> str:
         """Format task for display"""
+        parts = []
+
+        # 1. Started At
+        started = t.get('startedAt')
+        if started and isinstance(started, datetime):
+            parts.append(f"{started.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            parts.append("                   ") # Placeholder for alignment
+
+        # 2. IP / Instance
+        instance_ip = t.get('_instanceId', '').replace('i-', '') # Shorten instance ID for display if needed or keep full
+        # Actually user wants IP then Instance ID
+        # The enrichment puts _instanceId and _instanceIp
+        real_instance_id = t.get('_instanceId', '-')
+        real_instance_ip = t.get('_instanceIp', '-')
+
+        parts.append(f"[{real_instance_ip}]")
+        parts.append(f"[{real_instance_id}]")
+
+        # 3. Task ID (Last)
         task_id = extract_name_from_arn(t['taskArn'])
-        instance_id = t.get('_instanceId', '')
-        instance_ip = t.get('_instanceIp', '')
-        if instance_id and instance_ip:
-            return f"{task_id}  [{instance_id} / {instance_ip}]"
-        elif instance_id:
-            return f"{task_id}  [{instance_id}]"
-        return task_id
+        parts.append(task_id)
+
+        # Join with spacers
+        return "  |  ".join(parts)
 
     def _go_to_task_menu(self) -> None:
         """Go to task menu (actions for task)"""
@@ -719,7 +1027,7 @@ class ECSConnectApp(App):
         """Show task menu or skip to container menu if only one container"""
         self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
 
-        search = self.query_one("#search", Input)
+        search = self.query_one("#search", CustomInput)
         search.value = ""
         search.placeholder = ""
 
@@ -872,7 +1180,7 @@ class ECSConnectApp(App):
     def _render_container_view(self) -> None:
         """Render container selection view"""
         self._set_status(f"Instance: {self._instance_id}")
-        search = self.query_one("#search", Input)
+        search = self.query_one("#search", CustomInput)
         search.value = ""
         search.placeholder = ""
 
@@ -894,7 +1202,7 @@ class ECSConnectApp(App):
         self._instance_id = instance_id
         self._set_status(f"Instance: {instance_id}")
 
-        search = self.query_one("#search", Input)
+        search = self.query_one("#search", CustomInput)
         search.value = ""
         search.placeholder = ""
 
@@ -1134,7 +1442,7 @@ class ECSConnectApp(App):
         self.step = "time_select"
         self._set_status("Select time range")
 
-        search = self.query_one("#search", Input)
+        search = self.query_one("#search", CustomInput)
         search.value = ""
         search.placeholder = ""
 
@@ -1227,7 +1535,7 @@ class ECSConnectApp(App):
             if self.containers and len(self.containers) > 1:
                 self.step = "task_menu"
                 self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
-                search = self.query_one("#search", Input)
+                search = self.query_one("#search", CustomInput)
                 search.value = ""
                 search.placeholder = ""
                 self._render_task_menu_view()
@@ -1298,7 +1606,7 @@ class ECSConnectApp(App):
         elif self.step == "confirm":
             self._filter_confirm_view(event.value)
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    def on_input_submitted(self, event: CustomInput.Submitted) -> None:
         """Handle enter in search field"""
         self.action_select_current()
 
@@ -1534,6 +1842,17 @@ class ECSConnectApp(App):
 
             self._render_container_view()
 
+        elif worker_name == "batch_redeploy":
+            success_count = result.get('success_count', 0)
+            errors = result.get('errors', [])
+            total = result.get('total', 0)
+
+            if errors:
+                error_msg = f"Redeployed {success_count}/{total} services.\n\nErrors:\n" + "\n".join(errors)
+                self.push_screen(AlertModal(error_msg))
+            else:
+                self._set_temporary_status(f"Successfully redeployed {success_count} service(s)", 5.0)
+
     def _is_help_visible(self) -> bool:
         """Check if help overlay is visible"""
         try:
@@ -1541,6 +1860,55 @@ class ECSConnectApp(App):
             return True
         except Exception:
             return False
+
+    # ==================== REDEPLOY SERVICES ====================
+
+    def action_redeploy_services(self) -> None:
+        """Handle redeploy shortcut (Ctrl+U)"""
+        if self.step == "service" and self.services:
+            self.push_screen(RedeployServicesModal(self.services), self._batch_redeploy_services)
+
+    def _batch_redeploy_services(self, selected_services: List[str]) -> None:
+        """Redeploy selected services"""
+        if not selected_services:
+            return
+
+        cluster_name = self.selected_cluster['name']
+        self._show_loading("Redeploying services...")
+
+        # We process in a worker to not block UI
+        self.run_worker(
+            lambda: self._perform_batch_redeploy(cluster_name, selected_services),
+            name="batch_redeploy",
+            thread=True
+        )
+
+    def _perform_batch_redeploy(self, cluster_name: str, services: List[str]) -> dict:
+        """Worker function for batch redeploy"""
+        success_count = 0
+        errors = []
+
+        total = len(services)
+        for i, service_arn in enumerate(services):
+            svc_name = extract_name_from_arn(service_arn)
+            # Update loading message from main thread via call_from_thread
+            self.call_from_thread(self._update_loading_message, f"Redeploying {svc_name} ({i+1}/{total})...")
+
+            try:
+                self.aws.update_service(cluster_name, svc_name)
+                success_count += 1
+            except Exception as e:
+                errors.append(f"{svc_name}: {str(e)}")
+
+        return {'success_count': success_count, 'errors': errors, 'total': total}
+
+    def _update_loading_message(self, message: str) -> None:
+        """Update loading message text"""
+        try:
+            box = self.query_one("#loading-box Static", Static)
+            box.update(message)
+        except Exception:
+            pass
 
     def on_key(self, event) -> None:
         """Handle key presses"""

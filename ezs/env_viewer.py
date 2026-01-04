@@ -22,8 +22,8 @@ class EditModal(ModalScreen):
     }
 
     #edit-dialog {
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
         width: 60;
         height: auto;
@@ -32,24 +32,24 @@ class EditModal(ModalScreen):
     #edit-title {
         text-align: center;
         text-style: bold;
-        color: #a99fc4;
+        color: #c9bfe4;
         margin-bottom: 1;
     }
 
     #key-label {
-        color: #8a7fa0;
+        color: #a99fc0;
         margin-top: 1;
     }
 
     #edit-input {
         margin: 1 0;
-        background: #0f0c16;
-        border: solid #3d3556;
-        color: #e0dce8;
+        background: #1f1c26;
+        border: solid #4d4576;
+        color: #e8e4f0;
     }
 
     #edit-input:focus {
-        border: solid #a99fc4;
+        border: solid #c9bfe4;
     }
 
     #btn-row {
@@ -62,12 +62,12 @@ class EditModal(ModalScreen):
     .modal-btn {
         margin: 0 1;
         min-width: 12;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
     }
 
     .modal-btn:focus {
-        background: #5c4a6e;
+        background: #6a5a8e;
         color: #ffffff;
     }
     """
@@ -147,8 +147,8 @@ class ConfirmationModal(ModalScreen):
     }
 
     #confirm-dialog {
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
         width: 50;
         height: auto;
@@ -156,7 +156,7 @@ class ConfirmationModal(ModalScreen):
 
     #confirm-message {
         text-align: center;
-        color: #e0dce8;
+        color: #e8e4f0;
         margin: 1 0 2 0;
     }
 
@@ -169,12 +169,12 @@ class ConfirmationModal(ModalScreen):
     .modal-btn {
         margin: 0 1;
         min-width: 12;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
     }
 
     .modal-btn:focus {
-        background: #5c4a6e;
+        background: #6a5a8e;
         color: #ffffff;
     }
     """
@@ -270,8 +270,8 @@ class CommandPalette(ModalScreen):
     #palette-container {
         width: 50;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
     }
 
     ListView {
@@ -281,17 +281,17 @@ class CommandPalette(ModalScreen):
 
     ListItem {
         padding: 1 2;
-        color: #a99fc4;
+        color: #c9bfe4;
     }
 
     ListItem:hover {
-        background: #2a2536;
+        background: #3a3456;
     }
 
     #title {
         padding: 1 2;
-        background: #3d3556;
-        color: #e0dce8;
+        background: #4d4576;
+        color: #e8e4f0;
         text-style: bold;
     }
     """
@@ -330,8 +330,8 @@ class SuccessModal(ModalScreen):
     }
 
     #success-dialog {
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
         width: 70;
         max-width: 90%;
@@ -341,12 +341,12 @@ class SuccessModal(ModalScreen):
     #success-title {
         text-align: center;
         text-style: bold;
-        color: #a99fc4;
+        color: #c9bfe4;
         margin-bottom: 1;
     }
 
     #success-message {
-        color: #a99fc4;
+        color: #c9bfe4;
         margin: 1 0;
         max-height: 15;
         overflow-y: auto;
@@ -362,12 +362,12 @@ class SuccessModal(ModalScreen):
     .modal-btn {
         margin: 0 1;
         min-width: 12;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
     }
 
     .modal-btn:focus {
-        background: #5c4a6e;
+        background: #6a5a8e;
         color: #ffffff;
     }
     """
@@ -419,7 +419,7 @@ class ErrorModal(ModalScreen):
     }
 
     #error-dialog {
-        background: #1a1520;
+        background: #2a2435;
         border: solid #e06c75;
         padding: 1 2;
         width: 70;
@@ -435,7 +435,7 @@ class ErrorModal(ModalScreen):
     }
 
     #error-message {
-        color: #a99fc4;
+        color: #c9bfe4;
         margin: 1 0;
         max-height: 15;
         overflow-y: auto;
@@ -451,12 +451,12 @@ class ErrorModal(ModalScreen):
     .modal-btn {
         margin: 0 1;
         min-width: 12;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
     }
 
     .modal-btn:focus {
-        background: #5c4a6e;
+        background: #6a5a8e;
         color: #ffffff;
     }
     """
@@ -506,19 +506,19 @@ class EnvEditorApp(App):
     CSS = """
     * {
         scrollbar-size: 1 1;
-        scrollbar-color: #3d3556;
-        scrollbar-background: #08060d;
+        scrollbar-color: #4d4576;
+        scrollbar-background: #18141d;
     }
 
     Screen {
-        background: #08060d;
+        background: #18141d;
     }
 
     #header {
         dock: top;
         height: 1;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
         text-style: bold;
         padding: 0 1;
     }
@@ -526,38 +526,38 @@ class EnvEditorApp(App):
     #search {
         dock: top;
         margin: 1 1 0 1;
-        background: #0f0c16;
-        border: solid #3d3556;
+        background: #1f1c26;
+        border: solid #4d4576;
     }
 
     #search:focus {
-        border: solid #5c4a6e;
+        border: solid #7c6a9e;
     }
 
     DataTable {
-        background: #08060d;
-        color: #a99fc4;
+        background: #18141d;
+        color: #c9bfe4;
         height: 1fr;
-        border: solid #3d3556;
+        border: solid #4d4576;
         margin: 1;
     }
 
     DataTable > .datatable--header {
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
         text-style: bold;
     }
 
     DataTable > .datatable--cursor {
-        background: #2a2536;
-        color: #e0dce8;
+        background: #3a3456;
+        color: #e8e4f0;
     }
 
     #status-bar {
         dock: bottom;
         height: 1;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
         padding: 0 1;
     }
 
@@ -984,37 +984,37 @@ class EnvViewerLoadingApp(App):
 
     CSS = """
     Screen {
-        background: #08060d;
+        background: #18141d;
         align: center middle;
     }
 
     .loading-box {
         width: 50;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
     }
 
     .loading-box LoadingIndicator {
         width: 100%;
         height: 3;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
     }
 
     .loading-box Static {
         width: 100%;
         text-align: center;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
     }
 
     .error-box {
         width: 50;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
     }
 
@@ -1027,12 +1027,12 @@ class EnvViewerLoadingApp(App):
 
     .error-content {
         text-align: center;
-        color: #a99fc4;
+        color: #c9bfe4;
     }
 
     .error-hint {
         text-align: center;
-        color: #6a6080;
+        color: #8a80a0;
         text-style: italic;
         padding: 1 0 0 0;
     }

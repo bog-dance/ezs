@@ -26,15 +26,15 @@ class DownloadLogsApp(App):
     }
 
     Screen {
-        background: #08060d;
+        background: #18141d;
         align: center middle;
     }
 
     #title {
         dock: top;
         height: 1;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
         text-style: bold;
         padding: 0 1;
     }
@@ -42,16 +42,16 @@ class DownloadLogsApp(App):
     #status-bar {
         dock: bottom;
         height: 1;
-        background: #3d3556;
-        color: #6a6080;
+        background: #4d4576;
+        color: #8a80a0;
         padding: 0 1;
     }
 
     .loading-container {
         width: 50;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
         align: center middle;
     }
@@ -59,29 +59,29 @@ class DownloadLogsApp(App):
     .loading-container LoadingIndicator {
         width: 100%;
         height: 3;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
     }
 
     .loading-container Static {
         width: 100%;
         text-align: center;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
     }
 
     #result-box {
         width: 60;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
     }
 
     #result-title {
         text-align: center;
         text-style: bold;
-        color: #a99fc4;
+        color: #c9bfe4;
         padding: 0 0 1 0;
     }
 
@@ -92,13 +92,13 @@ class DownloadLogsApp(App):
 
     #result-path {
         text-align: center;
-        color: #6a6080;
+        color: #8a80a0;
         padding: 1 0 0 0;
     }
 
     #result-hint {
         text-align: center;
-        color: #6a6080;
+        color: #8a80a0;
         text-style: italic;
         padding: 1 0 0 0;
     }

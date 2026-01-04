@@ -22,8 +22,8 @@ class ExitConfirmModal(ModalScreen):
     }
 
     #exit-dialog {
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
         width: 40;
         height: auto;
@@ -31,7 +31,7 @@ class ExitConfirmModal(ModalScreen):
 
     #exit-message {
         text-align: center;
-        color: #a99fc4;
+        color: #c9bfe4;
         margin: 1 0 2 0;
     }
 
@@ -44,12 +44,12 @@ class ExitConfirmModal(ModalScreen):
     .modal-btn {
         margin: 0 1;
         min-width: 10;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
     }
 
     .modal-btn:focus {
-        background: #5c4a6e;
+        background: #6a5a8e;
         color: #ffffff;
     }
     """
@@ -110,8 +110,8 @@ class RedeployServicesModal(ModalScreen):
     }
 
     #redeploy-dialog {
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
         width: 70;
         height: auto;
@@ -121,36 +121,36 @@ class RedeployServicesModal(ModalScreen):
     #redeploy-title {
         text-align: center;
         text-style: bold;
-        color: #a99fc4;
+        color: #c9bfe4;
         margin-bottom: 1;
     }
 
     #redeploy-hint {
         text-align: center;
-        color: #6a6080;
+        color: #8a80a0;
         margin-bottom: 1;
     }
 
     #redeploy-services {
         height: auto;
         max-height: 20;
-        background: #0f0c16;
-        border: solid #3d3556;
+        background: #1f1c26;
+        border: solid #4d4576;
         margin: 1 0;
     }
 
     #redeploy-services:focus {
-        border: solid #5c4a6e;
+        border: solid #7c6a9e;
     }
 
     #redeploy-services > .option-list--option-highlighted {
-        background: #b0a7be;
-        color: #08060d;
+        background: #8a7fa0;
+        color: #1f1c26;
     }
 
     #redeploy-counter {
         text-align: center;
-        color: #8a7fa0;
+        color: #a99fc0;
         margin: 0 0 1 0;
     }
 
@@ -163,12 +163,12 @@ class RedeployServicesModal(ModalScreen):
     .modal-btn {
         margin: 0 1;
         min-width: 12;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
     }
 
     .modal-btn:focus {
-        background: #5c4a6e;
+        background: #6a5a8e;
         color: #ffffff;
     }
     """
@@ -316,8 +316,8 @@ class AlertModal(ModalScreen):
     }
 
     #alert-dialog {
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
         width: 60;
         height: auto;
@@ -326,7 +326,7 @@ class AlertModal(ModalScreen):
 
     #alert-msg {
         text-align: center;
-        color: #e0dce8;
+        color: #e8e4f0;
         margin: 1 0 2 0;
     }
 
@@ -339,12 +339,12 @@ class AlertModal(ModalScreen):
     .modal-btn {
         margin: 0 1;
         min-width: 10;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
     }
 
     .modal-btn:focus {
-        background: #5c4a6e;
+        background: #6a5a8e;
         color: #ffffff;
     }
     """
@@ -423,7 +423,7 @@ class ECSConnectApp(App):
 
     CSS = """
     Screen {
-        background: #08060d;
+        background: #18141d;
         overflow: hidden;
         scrollbar-size: 0 0;
     }
@@ -435,8 +435,8 @@ class ECSConnectApp(App):
     #title {
         dock: top;
         height: 1;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
         text-style: bold;
         padding: 0 1;
     }
@@ -444,45 +444,45 @@ class ECSConnectApp(App):
     #search {
         dock: top;
         margin: 1 1 0 1;
-        background: #0f0c16;
-        border: solid #3d3556;
+        background: #1f1c26;
+        border: solid #4d4576;
     }
 
     #search:focus {
-        border: solid #5c4a6e;
+        border: solid #7c6a9e;
     }
 
     #status {
         dock: top;
         height: 1;
         width: 100%;
-        background: #1a1520;
-        color: #6a6080;
+        background: #2a2435;
+        color: #8a80a0;
         padding: 0 1;
     }
 
     #scroll-area {
         margin: 1;
-        background: #08060d;
+        background: #18141d;
     }
 
     RegionBox {
-        border: solid #3d3556;
-        border-title-color: #a99fc4;
-        border-title-background: #3d3556;
+        border: solid #4d4576;
+        border-title-color: #c9bfe4;
+        border-title-background: #4d4576;
         height: auto;
         width: 42;
         margin: 0 0 1 0;
         padding: 0;
-        background: #08060d;
+        background: #18141d;
     }
 
     RegionBox > OptionList {
         height: auto;
         max-height: 14;
         width: 100%;
-        background: #08060d;
-        color: #8a7fa0;
+        background: #18141d;
+        color: #a99fc0;
     }
 
     RegionBox > OptionList:focus {
@@ -492,30 +492,30 @@ class ECSConnectApp(App):
     #options {
         margin: 1;
         height: 100%;
-        background: #08060d;
+        background: #18141d;
     }
 
     OptionList {
-        background: #08060d;
-        color: #8a7fa0;
+        background: #18141d;
+        color: #a99fc0;
     }
 
     OptionList > .option-list--option-disabled {
-        color: #3a3548;
+        color: #4a4568;
         text-style: dim;
     }
 
     OptionList > .option-list--option-highlighted {
-        background: #b0a7be;
-        color: #08060d;
+        background: #8a7fa0;
+        color: #18141d;
     }
 
     OptionList > .option-list--option-hover {
-        background: #1a1520;
+        background: #2a2435;
     }
 
     OptionList:focus {
-        border: solid #5c4a6e;
+        border: solid #7c6a9e;
     }
 
     .action-row {
@@ -537,7 +537,7 @@ class ECSConnectApp(App):
     #help-overlay {
         width: 100%;
         height: 100%;
-        background: #08060d 95%;
+        background: #18141d 95%;
         align: center middle;
         layer: overlay;
     }
@@ -545,9 +545,9 @@ class ECSConnectApp(App):
     #help-overlay Static {
         width: auto;
         height: auto;
-        color: #a99fc4;
-        background: #1a1520;
-        border: solid #3d3556;
+        color: #c9bfe4;
+        background: #2a2435;
+        border: solid #4d4576;
         padding: 1 3;
     }
 
@@ -555,7 +555,7 @@ class ECSConnectApp(App):
         dock: top;
         width: 100%;
         height: 100%;
-        background: #08060d 95%;
+        background: #18141d 95%;
         align: center middle;
         layer: overlay;
     }
@@ -563,22 +563,22 @@ class ECSConnectApp(App):
     #loading-box {
         width: 46;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
     }
 
     #loading-box LoadingIndicator {
         width: 100%;
         height: 3;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
     }
 
     #loading-box Static {
         width: 100%;
         text-align: center;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
         padding: 0 1;
     }

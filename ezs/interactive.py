@@ -100,6 +100,96 @@ class ExitConfirmModal(ModalScreen):
         self.dismiss(event.button.id == "yes")
 
 
+class ConfirmModal(ModalScreen):
+    """Generic Yes/No confirmation modal."""
+
+    CSS = """
+    ConfirmModal {
+        align: center middle;
+        background: #000000 50%;
+    }
+
+    #confirm-dialog {
+        background: #2a2435;
+        border: solid #7c6a9e;
+        padding: 1 2;
+        width: 60;
+        height: auto;
+    }
+
+    #confirm-message {
+        text-align: center;
+        color: #c9bfe4;
+        margin: 1 0 2 0;
+    }
+
+    #confirm-btns {
+        width: 100%;
+        align: center middle;
+        height: 3;
+    }
+
+    .modal-btn {
+        margin: 0 1;
+        min-width: 10;
+        background: #4d4576;
+        color: #c9bfe4;
+    }
+
+    .modal-btn:focus {
+        background: #6a5a8e;
+        color: #ffffff;
+    }
+    """
+
+    def __init__(self, message: str, *, yes_label: str = "Yes", no_label: str = "No"):
+        super().__init__()
+        self.message = message
+        self.yes_label = yes_label
+        self.no_label = no_label
+        self._focus_index = 0  # 0=No, 1=Yes
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static(self.message, id="confirm-message"),
+            Horizontal(
+                Button(self.no_label, id="no", classes="modal-btn"),
+                Button(self.yes_label, id="yes", classes="modal-btn"),
+                id="confirm-btns",
+            ),
+            id="confirm-dialog",
+        )
+
+    def on_mount(self) -> None:
+        self._focus_index = 0
+        self.query_one("#no", Button).focus()
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(False)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "y":
+            self.dismiss(True)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "n":
+            self.dismiss(False)
+            event.prevent_default()
+            event.stop()
+        elif event.key == "tab":
+            self._focus_index = (self._focus_index + 1) % 2
+            if self._focus_index == 0:
+                self.query_one("#no", Button).focus()
+            else:
+                self.query_one("#yes", Button).focus()
+            event.prevent_default()
+            event.stop()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+
 class RedeployServicesModal(ModalScreen):
     """Modal to select services for force redeployment"""
 
@@ -723,6 +813,7 @@ class ECSConnectApp(App):
             )
             self._go_to_service()
         else:
+            self.refresh_bindings()
             self._render_cluster_view()
             self.query_one("#search", CustomInput).focus()
 
@@ -886,6 +977,7 @@ class ECSConnectApp(App):
     def _go_to_cluster(self) -> None:
         """Go to cluster selection"""
         self.step = "cluster"
+        self.refresh_bindings()
         self._set_status("")
         search = self.query_one("#search", CustomInput)
         search.value = ""
@@ -896,6 +988,7 @@ class ECSConnectApp(App):
     def _go_to_service(self) -> None:
         """Go to service selection"""
         self.step = "service"
+        self.refresh_bindings()
         cluster_arn = self.selected_cluster['arn']
 
         # Use cache if available
@@ -941,6 +1034,7 @@ class ECSConnectApp(App):
     def _go_to_task(self) -> None:
         """Go to task selection"""
         self.step = "task"
+        self.refresh_bindings()
         cache_key = (self.selected_cluster['arn'], self.selected_service)
 
         # Use cache if available
@@ -1018,6 +1112,7 @@ class ECSConnectApp(App):
     def _go_to_task_menu(self) -> None:
         """Go to task menu (actions for task)"""
         self.step = "task_menu"
+        self.refresh_bindings()
         task_arn = self.selected_task.get('taskArn')
 
         # Check if we have cached container info
@@ -1166,6 +1261,7 @@ class ECSConnectApp(App):
     def _go_to_container(self) -> None:
         """Go to container selection"""
         self.step = "container"
+        self.refresh_bindings()
         task_arn = self.selected_task.get('taskArn')
 
         # Use cache if available
@@ -1234,6 +1330,7 @@ class ECSConnectApp(App):
     def _go_to_confirm(self, instance_id: str = None) -> None:
         """Go to action selection (SSH or Logs)"""
         self.step = "confirm"
+        self.refresh_bindings()
 
         if instance_id is None:
             cluster_arn = self.selected_cluster['arn']
@@ -1582,6 +1679,7 @@ class ECSConnectApp(App):
             # Go back to task_menu (which shows containers) or skip if single container
             if self.containers and len(self.containers) > 1:
                 self.step = "task_menu"
+                self.refresh_bindings()
                 self._set_status(f"Task: {extract_name_from_arn(self.selected_task['taskArn'])}")
                 search = self.query_one("#search", CustomInput)
                 search.value = ""
@@ -1830,12 +1928,14 @@ class ECSConnectApp(App):
 
             # Go to service view
             self.step = "service"
+            self.refresh_bindings()
             self._render_service_view()
 
         elif worker_name == "fetch_services":
             cluster_arn = self.selected_cluster['arn']
             self.services = result
             self.cached_services[cluster_arn] = result
+            self.refresh_bindings()
             self._render_service_view()
 
         elif worker_name == "fetch_tasks":
@@ -1947,13 +2047,23 @@ class ECSConnectApp(App):
     # ==================== REDEPLOY SERVICES ====================
 
     def check_action_redeploy_services(self) -> bool:
-        """Show Ctrl+U binding only in service selection menu"""
-        return self.step == "service" and bool(self.services)
+        """Show Ctrl+U binding in service selection and container menus."""
+        if self.step == "service":
+            return bool(self.services)
+        if self.step in ("task_menu", "confirm"):
+            return bool(self.selected_cluster) and bool(self.selected_service)
+        return False
 
     def action_redeploy_services(self) -> None:
         """Handle redeploy shortcut (Ctrl+U)"""
         if self.step == "service" and self.services:
             self.push_screen(RedeployServicesModal(self.services), self._batch_redeploy_services)
+        elif self.step in ("task_menu", "confirm") and self.selected_service:
+            service_name = extract_name_from_arn(self.selected_service)
+            self.push_screen(
+                ConfirmModal(f"Force redeploy service '{service_name}'?"),
+                lambda should_redeploy: self._batch_redeploy_services([self.selected_service]) if should_redeploy else None,
+            )
 
     def _batch_redeploy_services(self, selected_services: List[str]) -> None:
         """Redeploy selected services"""

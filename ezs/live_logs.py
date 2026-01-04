@@ -47,28 +47,28 @@ class LiveLogsApp(App):
     }
 
     Screen {
-        background: #08060d;
+        background: #18141d;
     }
 
     #title {
         dock: top;
         height: 1;
-        background: #3d3556;
-        color: #a99fc4;
+        background: #4d4576;
+        color: #c9bfe4;
         text-style: bold;
         padding: 0 1;
     }
 
     #log-view {
-        background: #08060d;
-        color: #a99fc4;
+        background: #18141d;
+        color: #c9bfe4;
         padding: 0 1;
     }
 
     #status-bar {
         dock: bottom;
         height: 1;
-        background: #3d3556;
+        background: #4d4576;
         layout: horizontal;
     }
 
@@ -76,14 +76,14 @@ class LiveLogsApp(App):
         width: 12;
         height: 1;
         padding: 0 1;
-        color: #6a6080;
-        background: #3d3556;
+        color: #8a80a0;
+        background: #4d4576;
         content-align: center middle;
     }
 
     .filter-btn.active {
-        color: #08060d;
-        background: #b0a7be;
+        color: #18141d;
+        background: #8a7fa0;
         text-style: bold;
     }
 
@@ -92,41 +92,41 @@ class LiveLogsApp(App):
         min-width: 10;
         height: 1;
         padding: 0 1;
-        color: #6a6080;
-        background: #2a2536;
+        color: #8a80a0;
+        background: #3a3456;
         content-align: center middle;
         margin: 0 1 0 0;
     }
 
     .container-btn.active {
-        color: #08060d;
+        color: #18141d;
         background: #8fa1b3;
         text-style: bold;
     }
 
     #btn-error.active { background: #e06c75; }
-    #btn-warning.active { background: #e5c07b; color: #08060d; }
-    #btn-info.active { background: #61afef; color: #08060d; }
-    #btn-debug.active { background: #6a6080; color: #08060d; }
+    #btn-warning.active { background: #e5c07b; color: #18141d; }
+    #btn-info.active { background: #61afef; color: #18141d; }
+    #btn-debug.active { background: #8a80a0; color: #18141d; }
 
     #info {
         width: 1fr;
         padding: 0 1;
-        color: #6a6080;
+        color: #8a80a0;
         text-align: right;
     }
 
     #container-bar {
         dock: bottom;
         height: 1;
-        background: #2a2536;
+        background: #3a3456;
         layout: horizontal;
     }
 
     .help-overlay {
         width: 100%;
         height: 100%;
-        background: #08060d 90%;
+        background: #18141d 90%;
         align: center middle;
         layer: overlay;
     }
@@ -134,25 +134,25 @@ class LiveLogsApp(App):
     #help-box {
         width: 50;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
     }
 
     #help-title {
         text-align: center;
         text-style: bold;
-        color: #a99fc4;
+        color: #c9bfe4;
         padding: 0 0 1 0;
     }
 
     #help-content {
-        color: #8a7fa0;
+        color: #a99fc0;
     }
 
     #help-hint {
         text-align: center;
-        color: #6a6080;
+        color: #8a80a0;
         text-style: italic;
         padding: 1 0 0 0;
     }
@@ -536,36 +536,36 @@ class LogLoaderApp(App):
 
     CSS = """
     Screen {
-        background: #08060d;
+        background: #18141d;
         align: center middle;
     }
 
     .loading-box {
         width: 50;
         height: auto;
-        background: #1a1520;
-        border: solid #5c4a6e;
+        background: #2a2435;
+        border: solid #7c6a9e;
         padding: 1 2;
     }
 
     .loading-box LoadingIndicator {
         width: 100%;
         height: 3;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
     }
 
     .loading-box Static {
         width: 100%;
         text-align: center;
-        color: #a99fc4;
+        color: #c9bfe4;
         background: transparent;
     }
 
     .error-box {
         width: 60;
         height: auto;
-        background: #1a1520;
+        background: #2a2435;
         border: solid #e06c75;
         padding: 1 2;
     }
@@ -579,12 +579,12 @@ class LogLoaderApp(App):
 
     .error-content {
         text-align: center;
-        color: #a99fc4;
+        color: #c9bfe4;
     }
 
     .error-hint {
         text-align: center;
-        color: #6a6080;
+        color: #8a80a0;
         text-style: italic;
         padding: 1 0 0 0;
     }

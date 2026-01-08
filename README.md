@@ -31,40 +31,56 @@
 └───────────────────────────────────────┘
 ```
 
+## Prerequisites
+
+Before installing EZS, ensure you have:
+
+### 1. AWS CLI configured
+```bash
+aws configure
+```
+
+### 2. SSM Session Manager Plugin
+
+**macOS:**
+```bash
+brew install --cask session-manager-plugin
+```
+
+**Linux (Debian/Ubuntu):**
+```bash
+curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o "session-manager-plugin.deb"
+sudo dpkg -i session-manager-plugin.deb
+```
+
+**Verify installation:**
+```bash
+session-manager-plugin
+```
+
 ## Installation
 
+**macOS (recommended):**
+```bash
+brew install pipx
+pipx install ezs
+```
+
+**Linux / pip:**
 ```bash
 pip install ezs
 ```
 
-Or install from source:
-
+**From source:**
 ```bash
 git clone https://github.com/yourusername/ezs.git
 cd ezs
-pip install -e .
+pipx install -e .  # or: pip install -e .
 ```
 
-## Requirements
+## AWS Requirements
 
-### AWS
-
-1. **AWS CLI** configured with credentials
-   ```bash
-   aws configure
-   ```
-
-2. **SSM Session Manager Plugin** installed
-   ```bash
-   # macOS
-   brew install --cask session-manager-plugin
-
-   # Linux (Debian/Ubuntu)
-   curl "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" -o "session-manager-plugin.deb"
-   sudo dpkg -i session-manager-plugin.deb
-   ```
-
-3. **IAM Permissions**:
+### IAM Permissions
    ```json
    {
      "Version": "2012-10-17",

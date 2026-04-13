@@ -39,7 +39,9 @@ class AWSClient:
 
     @staticmethod
     def list_all_clusters(regions: dict, profile: Optional[str] = None) -> List[Dict]:
-        """List all ECS clusters from all regions (parallel), preserving region order"""
+        """List all ECS clusters from all regions (parallel), preserving region order.
+        Legacy single-account method.
+        """
         region_order = list(regions.keys())
         results_by_region = {code: [] for code in region_order}
 
@@ -75,6 +77,73 @@ class AWSClient:
         all_clusters = []
         for region_code in region_order:
             all_clusters.extend(results_by_region[region_code])
+
+        return all_clusters
+
+    @staticmethod
+    def list_all_clusters_multi(accounts: List[Dict]) -> List[Dict]:
+        """List ECS clusters from multiple accounts/profiles in parallel.
+
+        Args:
+            accounts: list of {"profile": str|None, "name": str, "regions": [str]}
+
+        Returns:
+            list of cluster dicts with 'account_name' and 'profile' fields added.
+            Ordered by account order, then region order within each account.
+        """
+        from .config_manager import REGION_NAMES
+
+        all_clusters = []
+
+        # Build flat list of (account, region) pairs for parallel fetch
+        fetch_jobs = []
+        for account in accounts:
+            profile = account.get('profile')
+            account_name = account.get('name', 'default')
+            for region_code in account.get('regions', []):
+                region_name = REGION_NAMES.get(region_code, region_code)
+                fetch_jobs.append((profile, account_name, region_code, region_name))
+
+        if not fetch_jobs:
+            return []
+
+        def fetch_clusters(job):
+            profile, account_name, region_code, region_name = job
+            try:
+                session = boto3.Session(region_name=region_code, profile_name=profile)
+                ecs = session.client('ecs')
+                response = ecs.list_clusters()
+                return [(profile, account_name, region_code, region_name, arn)
+                        for arn in response.get('clusterArns', [])]
+            except Exception:
+                return []
+
+        # Parallel fetch across all account+region combinations
+        results_by_job = {}
+        with ThreadPoolExecutor(max_workers=min(len(fetch_jobs), 20)) as executor:
+            futures = {executor.submit(fetch_clusters, job): job for job in fetch_jobs}
+            for future in as_completed(futures):
+                job = futures[future]
+                try:
+                    results_by_job[job] = future.result()
+                except Exception:
+                    results_by_job[job] = []
+
+        # Flatten preserving account > region order
+        for job in fetch_jobs:
+            items = results_by_job.get(job, [])
+            clusters = [
+                {
+                    'arn': arn,
+                    'name': extract_name_from_arn(arn),
+                    'region': region_code,
+                    'region_name': region_name,
+                    'account_name': account_name,
+                    'profile': profile,
+                }
+                for profile, account_name, region_code, region_name, arn in items
+            ]
+            all_clusters.extend(sorted(clusters, key=lambda x: x['name']))
 
         return all_clusters
 

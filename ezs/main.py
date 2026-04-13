@@ -17,8 +17,8 @@ from textual.app import App, ComposeResult
 from textual.widgets import Static, LoadingIndicator
 from textual.containers import Container
 from textual.worker import WorkerState
-from .config import REGIONS, reload_regions
-from .config_manager import config_exists
+from .config import REGIONS, reload_regions, reload_accounts
+from .config_manager import config_exists, get_configured_accounts
 from .aws_client import AWSClient
 from .interactive import run_ecs_connect
 from .setup_wizard import run_setup_wizard
@@ -66,10 +66,11 @@ class ClusterLoadingApp(App):
     }
     """
 
-    def __init__(self, regions: dict, profile: str = None):
+    def __init__(self, regions: dict = None, profile: str = None, accounts: list = None):
         super().__init__()
         self.regions = regions
         self.profile = profile
+        self.accounts = accounts
         self.clusters = None
 
     def compose(self) -> ComposeResult:
@@ -83,6 +84,8 @@ class ClusterLoadingApp(App):
         self.run_worker(self._fetch_clusters, name="fetch_clusters", thread=True)
 
     def _fetch_clusters(self) -> list:
+        if self.accounts:
+            return AWSClient.list_all_clusters_multi(self.accounts)
         return AWSClient.list_all_clusters(self.regions, profile=self.profile)
 
     def on_worker_state_changed(self, event) -> None:
@@ -216,7 +219,7 @@ def download_logs(result: dict, profile: str = None):
 def main():
     """Main CLI workflow"""
     parser = argparse.ArgumentParser(description="EZS - ECS Container Access Tool")
-    parser.add_argument('--profile', type=str, help='AWS profile to use')
+    parser.add_argument('--profile', type=str, help='AWS profile to use (overrides config accounts)')
     parser.add_argument('--configure', action='store_true', help='Configure AWS regions for ECS discovery')
     args = parser.parse_args()
 
@@ -238,11 +241,17 @@ def main():
         # Reload regions after setup
         regions = reload_regions()
         console.print(f"[green]Configuration saved. {len(result)} regions configured.[/green]")
-    else:
-        regions = REGIONS
 
-    # Fetch clusters from configured regions with loading UI
-    loader = ClusterLoadingApp(regions, profile=args.profile)
+    # Determine how to fetch clusters
+    if args.profile:
+        # Explicit --profile: single account mode (legacy)
+        regions = REGIONS
+        loader = ClusterLoadingApp(regions=regions, profile=args.profile)
+    else:
+        # Multi-account mode from config
+        accounts = get_configured_accounts()
+        loader = ClusterLoadingApp(accounts=accounts)
+
     result = loader.run()
 
     if result != "success" or not loader.clusters:
@@ -282,33 +291,37 @@ def main():
         # Track redeployed services for cache invalidation
         redeployed_service = None
 
+        # Profile comes from the selected cluster (multi-account) or CLI override
+        effective_profile = result.get('profile') or args.profile
+
         # Start the appropriate session
         if result['type'] == 'ssh':
-            start_ssh_session(result['instance_id'], result['region'])
+            start_ssh_session(result['instance_id'], result['region'], profile=effective_profile)
         elif result['type'] == 'container':
             if result.get('container_id'):
                 start_container_session(
                     result['instance_id'],
                     result['container_id'],
-                    result['region']
+                    result['region'],
+                    profile=effective_profile
                 )
             else:
                 console.print("[yellow]Container ID not available. Falling back to SSH.[/yellow]")
-                start_ssh_session(result['instance_id'], result['region'])
+                start_ssh_session(result['instance_id'], result['region'], profile=effective_profile)
         elif result['type'] == 'logs_live':
-            stream_live_logs(result, args.profile)
+            stream_live_logs(result, effective_profile)
         elif result['type'] == 'task_logs_live':
-            stream_task_logs(result, args.profile)
+            stream_task_logs(result, effective_profile)
         elif result['type'] == 'env_vars':
-            env_result = view_env_vars(result, args.profile)
+            env_result = view_env_vars(result, effective_profile)
             if env_result and env_result.get('was_redeployed'):
                 redeployed_service = result.get('service')
         elif result['type'] == 'task_env_vars':
-            env_result = view_task_env_vars(result, args.profile)
+            env_result = view_task_env_vars(result, effective_profile)
             if env_result and env_result.get('was_redeployed'):
                 redeployed_service = result.get('service')
         elif result['type'] == 'logs_download':
-            download_logs(result, args.profile)
+            download_logs(result, effective_profile)
 
         # If a service was redeployed, add to resume_context for cache invalidation
         if redeployed_service:

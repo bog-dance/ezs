@@ -1,6 +1,6 @@
 """Configuration constants"""
 
-from .config_manager import get_configured_regions
+from .config_manager import get_configured_regions, get_configured_accounts
 
 # Dynamic regions from config (or defaults)
 REGIONS = get_configured_regions()
@@ -13,3 +13,8 @@ def reload_regions():
     global REGIONS
     REGIONS = get_configured_regions()
     return REGIONS
+
+
+def reload_accounts():
+    """Reload accounts from config after setup"""
+    return get_configured_accounts()

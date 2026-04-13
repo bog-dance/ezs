@@ -20,6 +20,13 @@ DEFAULT_REGIONS = {
     "eu-west-2": "London",
 }
 
+# Default account when no accounts configured
+DEFAULT_ACCOUNT = {
+    "profile": None,
+    "name": "default",
+    "regions": list(DEFAULT_REGIONS.keys()),
+}
+
 # Full list of AWS region display names
 REGION_NAMES = {
     "us-east-1": "N.Virginia",
@@ -85,7 +92,9 @@ def save_config(config: Dict) -> bool:
 
 
 def get_configured_regions() -> Dict[str, str]:
-    """Get regions from config or return defaults"""
+    """Get regions from config or return defaults.
+    Legacy function - use get_configured_accounts() for multi-account support.
+    """
     config = load_config()
     region_codes = config.get('regions', [])
 
@@ -99,8 +108,47 @@ def get_configured_regions() -> Dict[str, str]:
     }
 
 
+def get_configured_accounts() -> List[Dict]:
+    """Get accounts from config. Supports both new (accounts) and legacy (regions) format.
+
+    Returns list of dicts: [{"profile": str|None, "name": str, "regions": [str]}]
+    """
+    config = load_config()
+
+    # New format: accounts list
+    if 'accounts' in config and config['accounts']:
+        accounts = []
+        for acc in config['accounts']:
+            accounts.append({
+                'profile': acc.get('profile'),
+                'name': acc.get('name', acc.get('profile', 'default')),
+                'regions': acc.get('regions', []),
+            })
+        return accounts
+
+    # Legacy format: just regions list
+    region_codes = config.get('regions', [])
+    if region_codes:
+        return [{
+            'profile': None,
+            'name': 'default',
+            'regions': region_codes,
+        }]
+
+    return [DEFAULT_ACCOUNT.copy()]
+
+
+def save_accounts(accounts: List[Dict]) -> bool:
+    """Save accounts to config"""
+    config = load_config()
+    config['accounts'] = accounts
+    # Remove legacy regions key if present
+    config.pop('regions', None)
+    return save_config(config)
+
+
 def save_regions(region_codes: List[str]) -> bool:
-    """Save selected regions to config"""
+    """Save selected regions to config (legacy)"""
     config = load_config()
     config['regions'] = region_codes
     return save_config(config)
@@ -169,6 +217,12 @@ def detect_ecs_regions(profile: Optional[str] = None, progress_callback=None) ->
                 regions_with_ecs.append(result)
 
     return sorted(regions_with_ecs)
+
+
+def get_prefetch_enabled() -> bool:
+    """Check if cluster prefetch is enabled (default: True)"""
+    config = load_config()
+    return config.get('prefetch', True)
 
 
 def get_region_display_name(region_code: str) -> str:

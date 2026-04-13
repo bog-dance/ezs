@@ -10,6 +10,7 @@ from textual.worker import Worker, WorkerState
 from textual.screen import ModalScreen
 from datetime import datetime
 from .aws_client import extract_name_from_arn
+from .config_manager import get_prefetch_enabled
 
 
 class ExitConfirmModal(ModalScreen):
@@ -693,7 +694,7 @@ class ECSConnectApp(App):
         super().__init__()
         self.all_clusters = clusters
         self.aws_client_factory = aws_client_factory
-        self.profile = profile
+        self.profile = profile  # CLI override, takes precedence
         self.initial_cluster = initial_cluster
         self.resume_context = resume_context
 
@@ -735,13 +736,28 @@ class ECSConnectApp(App):
         self._render_id = 0  # For unique widget IDs
         self._current_options_id = None  # Current options list ID
 
-        # Group clusters by region
+        # Group clusters by account > region
+        self.accounts_order = []
+        self.clusters_by_account_region = {}  # (account, region) -> [clusters]
+        for c in clusters:
+            account = c.get('account_name', 'default')
+            region = c['region']
+            key = (account, region)
+            if account not in self.accounts_order:
+                self.accounts_order.append(account)
+            if key not in self.clusters_by_account_region:
+                self.regions_order.append(key)
+                self.clusters_by_account_region[key] = []
+            self.clusters_by_account_region[key].append(c)
+
+        # Legacy compat: also build clusters_by_region for single-account
         for c in clusters:
             region = c['region']
             if region not in self.clusters_by_region:
-                self.regions_order.append(region)
                 self.clusters_by_region[region] = []
             self.clusters_by_region[region].append(c)
+
+        self.multi_account = len(self.accounts_order) > 1
 
     def compose(self) -> ComposeResult:
         yield Static("Select ECS Cluster", id="title")
@@ -798,7 +814,7 @@ class ECSConnectApp(App):
             if self.selected_cluster:
                 self.aws = self.aws_client_factory(
                     region=self.selected_cluster['region'],
-                    profile=self.profile
+                    profile=self._get_cluster_profile()
                 )
                 self._go_to_confirm(self._instance_id)
             else:
@@ -809,13 +825,22 @@ class ECSConnectApp(App):
             self.selected_cluster = self.initial_cluster
             self.aws = self.aws_client_factory(
                 region=self.initial_cluster['region'],
-                profile=self.profile
+                profile=self._get_cluster_profile()
             )
             self._go_to_service()
         else:
             self.refresh_bindings()
             self._render_cluster_view()
             self.query_one("#search", CustomInput).focus()
+
+    def _get_cluster_profile(self, cluster: dict = None) -> Optional[str]:
+        """Get AWS profile for a cluster. CLI --profile overrides cluster-level profile."""
+        if self.profile:
+            return self.profile
+        c = cluster or self.selected_cluster
+        if c:
+            return c.get('profile')
+        return None
 
     def _set_status(self, message: str) -> None:
         """Update status bar"""
@@ -873,7 +898,7 @@ class ECSConnectApp(App):
     # ==================== CLUSTER VIEW ====================
 
     def _render_cluster_view(self, filter_text: str = "") -> None:
-        """Render cluster selection with region boxes"""
+        """Render cluster selection with account > region boxes"""
         self._set_title("Select ECS Cluster")
         self._clear_scroll_area()
 
@@ -881,10 +906,11 @@ class ECSConnectApp(App):
         filter_lower = filter_text.lower() if filter_text else ""
 
         self.nav_list = []
-        total_matches = 0
+        self._list_ids = []  # track all option list IDs for highlight clearing
 
-        for region in self.regions_order:
-            clusters = self.clusters_by_region[region]
+        for account_region_key in self.regions_order:
+            account_name, region = account_region_key
+            clusters = self.clusters_by_account_region[account_region_key]
 
             if filter_lower:
                 filtered = [c for c in clusters if filter_lower in c['name'].lower()]
@@ -894,40 +920,46 @@ class ECSConnectApp(App):
             if not filtered:
                 continue
 
+            # Build unique list ID
+            list_id = f"list-{account_name}-{region}"
+
             region_name = clusters[0]['region_name']
-            box = RegionBox(region_name, region)
-            box.border_title = f" {region_name} ({region}) "
+            if self.multi_account:
+                box = RegionBox(region_name, region)
+                box.border_title = f" {account_name} / {region_name} ({region}) "
+            else:
+                box = RegionBox(region_name, region)
+                box.border_title = f" {region_name} ({region}) "
             scroll.mount(box)
 
-            option_list = OptionList(id=f"list-{region}")
+            option_list = OptionList(id=list_id)
             box.mount(option_list)
+            self._list_ids.append(list_id)
 
             for idx, c in enumerate(filtered):
                 option_list.add_option(Option(c['name']))
-                self.nav_list.append((region, idx, c))
-                total_matches += 1
+                self.nav_list.append((list_id, idx, c))
 
         # Reset navigation and highlight first item
         self.nav_index = 0
         if self.nav_list:
-            # Schedule highlight update after render
             self.call_after_refresh(self._update_cluster_highlight)
 
     def _update_cluster_highlight(self) -> None:
         """Update visual highlight for cluster view"""
         # Clear all highlights
-        for region in self.regions_order:
+        for list_id in getattr(self, '_list_ids', []):
             try:
-                option_list = self.query_one(f"#list-{region}", OptionList)
+                option_list = self.query_one(f"#{list_id}", OptionList)
                 option_list.highlighted = None
             except Exception:
                 pass
 
         # Set highlight on current nav item
         if self.nav_list and 0 <= self.nav_index < len(self.nav_list):
-            region, local_idx, _ = self.nav_list[self.nav_index]
+            list_id, local_idx, _ = self.nav_list[self.nav_index]
             try:
-                option_list = self.query_one(f"#list-{region}", OptionList)
+                option_list = self.query_one(f"#{list_id}", OptionList)
                 option_list.highlighted = local_idx
                 option_list.scroll_to_highlight()
             except Exception:
@@ -1605,7 +1637,7 @@ class ECSConnectApp(App):
             # Initialize AWS client
             self.aws = self.aws_client_factory(
                 region=cluster['region'],
-                profile=self.profile
+                profile=self._get_cluster_profile(cluster)
             )
 
             # Check if cluster is already cached
@@ -1615,7 +1647,7 @@ class ECSConnectApp(App):
                 self.services = self.cached_services[cluster_arn]
                 self.step = "service"
                 self._render_service_view()
-            else:
+            elif get_prefetch_enabled():
                 # Prefetch entire cluster hierarchy
                 self._show_loading(f"Loading {cluster['name']}...")
                 self.run_worker(
@@ -1624,6 +1656,9 @@ class ECSConnectApp(App):
                     exclusive=True,
                     thread=True
                 )
+            else:
+                # Lazy load - only fetch services
+                self._go_to_service()
 
     def _handle_list_select(self, item: Any) -> None:
         """Handle selection in list views"""
@@ -1759,15 +1794,13 @@ class ECSConnectApp(App):
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Handle mouse click on option"""
         if self.step == "cluster":
-            # Find clicked cluster
+            # Find clicked cluster by matching option list ID
             option_list = event.option_list
-            for region in self.regions_order:
-                if option_list.id == f"list-{region}":
-                    for i, (r, idx, cluster) in enumerate(self.nav_list):
-                        if r == region and idx == event.option_index:
-                            self.nav_index = i
-                            self._handle_cluster_select()
-                            return
+            for i, (list_id, idx, cluster) in enumerate(self.nav_list):
+                if option_list.id == list_id and idx == event.option_index:
+                    self.nav_index = i
+                    self._handle_cluster_select()
+                    return
         elif self.step == "task_menu":
             # Find clicked action in task menu
             option_list = event.option_list
@@ -2220,6 +2253,8 @@ def run_ecs_connect(clusters: List[dict], aws_client_class, profile: Optional[st
         app.result['task'] = app.selected_task
         app.result['container'] = app.selected_container
         app.result['instance_id'] = getattr(app, '_instance_id', None)
+        # Resolve profile from cluster (for multi-account)
+        app.result['profile'] = app._get_cluster_profile()
         # Include ALL cached data for faster resume
         app.result['cached_services'] = app.cached_services
         app.result['cached_tasks'] = app.cached_tasks

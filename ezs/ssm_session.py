@@ -126,18 +126,26 @@ def get_container_id(instance_id: str, container_name: str, region: str) -> Opti
         return None
 
 
-def start_ssh_session(instance_id: str, region: str):
+def _build_aws_cmd(base_cmd: list, profile: Optional[str] = None) -> list:
+    """Add --profile to AWS CLI command if specified"""
+    if profile:
+        return base_cmd + ['--profile', profile]
+    return base_cmd
+
+
+def start_ssh_session(instance_id: str, region: str, profile: Optional[str] = None):
     """Start SSM session to EC2 instance (SSH mode)"""
     # Show loading screen
     app = ConnectingApp(f"Connecting to {instance_id}...")
     app.run()
 
     try:
-        subprocess.run([
+        cmd = _build_aws_cmd([
             'aws', 'ssm', 'start-session',
             '--target', instance_id,
             '--region', region
-        ])
+        ], profile)
+        subprocess.run(cmd)
     except KeyboardInterrupt:
         pass
     except Exception as e:
@@ -146,7 +154,8 @@ def start_ssh_session(instance_id: str, region: str):
         reset_terminal()
 
 
-def start_container_session(instance_id: str, container_id: str, region: str):
+def start_container_session(instance_id: str, container_id: str, region: str,
+                            profile: Optional[str] = None):
     """Start SSM session and exec into Docker container"""
     # Take only first container ID if multiple returned, and clean it
     container_id = container_id.strip().split('\n')[0].split()[0]
@@ -158,19 +167,20 @@ def start_container_session(instance_id: str, container_id: str, region: str):
     docker_command = f"sudo docker exec -it {container_id} /bin/sh"
 
     try:
-        subprocess.run([
+        cmd = _build_aws_cmd([
             'aws', 'ssm', 'start-session',
             '--target', instance_id,
             '--region', region,
             '--document-name', 'AWS-StartInteractiveCommand',
             '--parameters', f'{{"command":["{docker_command}"]}}'
-        ])
+        ], profile)
+        subprocess.run(cmd)
     except KeyboardInterrupt:
         pass
     except Exception as e:
         console.print(f"[red]Error starting container session: {e}[/red]")
         console.print("[yellow]Falling back to regular SSH session...[/yellow]")
-        start_ssh_session(instance_id, region)
+        start_ssh_session(instance_id, region, profile=profile)
     finally:
         reset_terminal()
 
